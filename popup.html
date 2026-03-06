@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Article Word Counter</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="popup">
+      <section class="card" aria-live="polite">
+        <p class="label">Article Word Count</p>
+        <h1 id="count" class="count">--</h1>
+        <p id="meta" class="meta">Open an article tab, then refresh.</p>
+      </section>
+
+      <section class="details">
+        <p id="title" class="title">Current tab</p>
+        <div class="chips">
+          <span id="readingTime" class="chip">-- read</span>
+          <span id="speedChip" class="chip">500 wpm</span>
+          <span id="confidence" class="chip">Confidence: --</span>
+        </div>
+      </section>
+
+      <div class="actions">
+        <button id="refreshButton" class="refresh" type="button">Refresh Count</button>
+        <button id="speedButton" class="speed" type="button">Set Speed</button>
+      </div>
+
+      <section class="controlChips" aria-label="Reading speed presets and debug controls">
+        <button class="presetChip" type="button" data-preset-wpm="650">Skim</button>
+        <button class="presetChip" type="button" data-preset-wpm="500">Normal</button>
+        <button class="presetChip" type="button" data-preset-wpm="350">Deep</button>
+        <button id="debugToggleButton" class="debugToggle" type="button" aria-pressed="false">
+          Debug: Off
+        </button>
+      </section>
+
+      <section id="debugPanel" class="debugPanel" hidden>
+        <p class="debugLabel">Debug Diagnostics</p>
+        <pre id="debugDetails" class="debugDetails">Debug mode is off.</pre>
+      </section>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

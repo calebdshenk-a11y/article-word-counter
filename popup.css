@@ -1,0 +1,253 @@
+:root {
+  color-scheme: light;
+  --bg-start: #eef4ff;
+  --bg-end: #f7fff6;
+  --card-bg: rgba(255, 255, 255, 0.78);
+  --text-strong: #102a43;
+  --text-muted: #556987;
+  --accent: #0b7a75;
+  --accent-soft: #d6f2f1;
+  --chip-bg: #ffffff;
+  --chip-border: #c7d2e3;
+  --button: #0c8b86;
+  --button-hover: #0a726d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family:
+    "Avenir Next",
+    "Segoe UI",
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+  background:
+    radial-gradient(circle at 10% 10%, rgba(129, 185, 255, 0.24), transparent 45%),
+    radial-gradient(circle at 90% 20%, rgba(110, 223, 172, 0.2), transparent 42%),
+    linear-gradient(140deg, var(--bg-start), var(--bg-end));
+  color: var(--text-strong);
+}
+
+.popup {
+  width: 340px;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.card {
+  background: var(--card-bg);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  border-radius: 16px;
+  padding: 14px;
+  box-shadow: 0 10px 24px rgba(16, 42, 67, 0.12);
+}
+
+.label {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.count {
+  margin: 6px 0 4px;
+  display: inline-block;
+  width: fit-content;
+  font-size: 48px;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.meta {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.details {
+  display: grid;
+  gap: 8px;
+}
+
+.title {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  line-height: 1;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--chip-bg);
+  border: 1px solid var(--chip-border);
+  border-radius: 999px;
+  padding: 4px 10px;
+}
+
+#readingTime {
+  font-size: 14px;
+  font-weight: 800;
+  color: #0a4f4c;
+  background: linear-gradient(140deg, #dbf8f5, #c9f1ed);
+  border-color: #6bcfc6;
+  padding: 6px 14px;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.refresh {
+  border: 0;
+  border-radius: 12px;
+  font: inherit;
+  font-weight: 700;
+  padding: 10px 12px;
+  background: var(--button);
+  color: #ffffff;
+  cursor: pointer;
+  transition: background-color 0.16s ease;
+}
+
+.refresh:hover {
+  background: var(--button-hover);
+}
+
+.speed {
+  border: 1px solid var(--chip-border);
+  border-radius: 12px;
+  font: inherit;
+  font-weight: 700;
+  padding: 10px 12px;
+  background: #ffffff;
+  color: var(--text-strong);
+  cursor: pointer;
+  transition: background-color 0.16s ease;
+}
+
+.speed:hover {
+  background: #edf3fc;
+}
+
+.controlChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.presetChip {
+  border: 1px solid var(--chip-border);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  min-height: 34px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease;
+}
+
+.presetChip:hover {
+  background: #edf3fc;
+}
+
+.presetChip[aria-pressed="true"] {
+  border-color: #60cfc8;
+  background: linear-gradient(140deg, #dff8f5, #ccf3ee);
+  color: #0a4f4c;
+}
+
+.debugToggle {
+  border: 1px solid var(--chip-border);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  min-height: 34px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease;
+}
+
+.debugToggle:hover {
+  background: #edf3fc;
+}
+
+.debugToggle[aria-pressed="true"] {
+  border-color: #4db8b3;
+  color: #0a4f4c;
+  background: #d9f5f2;
+}
+
+.debugPanel {
+  border: 1px solid #d5dfec;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.84);
+  padding: 10px;
+}
+
+.debugLabel {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.debugDetails {
+  margin: 0;
+  max-height: 120px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  line-height: 1.4;
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace;
+  color: #234361;
+}
