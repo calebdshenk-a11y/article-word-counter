@@ -2,9 +2,10 @@
 
 (() => {
 
-var CONTENT_SCRIPT_VERSION = 11;
+var CONTENT_SCRIPT_VERSION = 12;
 var REQUIRED_SELECTION_WORDS = 1;
 var NEWYORKER_END_MARKER_PATTERN = /^[♦◆❖◊]\s*$/;
+var NEWYORKER_END_MARKER_ANYWHERE_PATTERN = /[♦◆❖◊]/;
 
 var JUNK_KEYWORDS =
   /\b(ad|ads|advert|promo|sponsor|newsletter|subscribe|header|footer|nav|menu|sidebar|related|recommend|popular|trending|cookie|consent|comment|share|social|banner|breadcrumb|outbrain|taboola|paywall)\b/i;
@@ -1326,12 +1327,69 @@ function looksLikeByline(text) {
   return /^by\s+[a-z]/i.test(text) || /^\w+\s+\|\s+\w+/.test(text);
 }
 
-function isNewYorkerEndMarker(text, wordsCollected) {
-  return Boolean(
-    hasSiteAdapter("newyorker") &&
-      wordsCollected >= 250 &&
-      NEWYORKER_END_MARKER_PATTERN.test(normalizeText(text))
-  );
+function findNewYorkerEndMarker(root) {
+  if (!hasSiteAdapter("newyorker") || !(root instanceof Element)) {
+    return null;
+  }
+
+  var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  var wordsCollected = 0;
+  var current;
+
+  while ((current = walker.nextNode())) {
+    if (!(current instanceof Text)) {
+      continue;
+    }
+
+    var parent = current.parentElement;
+    if (!parent || !isProbablyVisible(parent) || isInsideBoilerplate(parent, root)) {
+      continue;
+    }
+
+    var rawText = current.textContent || "";
+    if (!rawText.trim()) {
+      continue;
+    }
+
+    var markerIndex = rawText.search(NEWYORKER_END_MARKER_ANYWHERE_PATTERN);
+    if (markerIndex !== -1 && wordsCollected >= 250) {
+      return {
+        node: current,
+        markerIndex: markerIndex
+      };
+    }
+
+    wordsCollected += countWords(rawText);
+  }
+
+  return null;
+}
+
+function trimNewYorkerBlockAtMarker(text) {
+  var normalized = normalizeText(text);
+  if (!normalized) {
+    return { text: "", stopAfter: false };
+  }
+
+  if (NEWYORKER_END_MARKER_PATTERN.test(normalized)) {
+    return { text: "", stopAfter: true };
+  }
+
+  var markerIndex = normalized.search(NEWYORKER_END_MARKER_ANYWHERE_PATTERN);
+  if (markerIndex === -1) {
+    return { text: normalized, stopAfter: false };
+  }
+
+  var beforeMarker = normalizeText(normalized.slice(0, markerIndex));
+  var afterMarker = normalizeText(normalized.slice(markerIndex + 1));
+  if (afterMarker && countWords(afterMarker) > 30) {
+    return { text: normalized, stopAfter: false };
+  }
+
+  return {
+    text: beforeMarker,
+    stopAfter: true
+  };
 }
 
 function collectLegacyArticleText(root) {
@@ -1448,7 +1506,7 @@ function collectLegacyArticleText(root) {
 function collectArticleBlocks(root) {
   const blocks = [];
   const candidates = root.querySelectorAll(BLOCK_SELECTOR);
-  let wordsCollected = 0;
+  const newYorkerMarker = findNewYorkerEndMarker(root);
 
   for (const node of candidates) {
     if (!isProbablyVisible(node)) {
@@ -1461,9 +1519,26 @@ function collectArticleBlocks(root) {
       continue;
     }
 
-    const text = normalizeText(node.textContent);
-    if (isNewYorkerEndMarker(text, wordsCollected)) {
-      break;
+    let text = normalizeText(node.textContent);
+    let shouldStopAfterBlock = false;
+    if (newYorkerMarker) {
+      if (node.contains(newYorkerMarker.node)) {
+        const trimmed = trimNewYorkerBlockAtMarker(node.textContent || "");
+        shouldStopAfterBlock = trimmed.stopAfter;
+        if (!trimmed.text) {
+          break;
+        }
+        text = trimmed.text;
+      } else if (newYorkerMarker.node.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) {
+        break;
+      }
+    }
+
+    if (!text) {
+      if (shouldStopAfterBlock) {
+        break;
+      }
+      continue;
     }
 
     const words = countWords(text);
@@ -1485,7 +1560,9 @@ function collectArticleBlocks(root) {
     }
 
     blocks.push({ node, text, words });
-    wordsCollected += words;
+    if (shouldStopAfterBlock) {
+      break;
+    }
   }
 
   return blocks;
