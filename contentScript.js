@@ -2,7 +2,7 @@
 
 (() => {
 
-var CONTENT_SCRIPT_VERSION = 14;
+var CONTENT_SCRIPT_VERSION = 16;
 var REQUIRED_SELECTION_WORDS = 1;
 var NEWYORKER_END_MARKER_PATTERN = /^[♦◆❖◊]\s*$/;
 var NEWYORKER_END_MARKER_ANYWHERE_PATTERN = /[♦◆❖◊]/;
@@ -1235,11 +1235,173 @@ function takeLastWords(text, maxWords) {
   return words.slice(words.length - maxWords).join(" ");
 }
 
+var STRUCTURED_PROGRESS_TAGS = new Set([
+  "P",
+  "BLOCKQUOTE",
+  "PRE",
+  "H1",
+  "H2",
+  "H3",
+  "H4",
+  "H5",
+  "H6",
+  "LI",
+  "FIGCAPTION",
+  "DIV"
+]);
+
+function pushUniqueElement(out, seen, node) {
+  if (!(node instanceof Element) || seen.has(node)) {
+    return;
+  }
+  seen.add(node);
+  out.push(node);
+}
+
+function normalizeStructuredProgressText(text) {
+  if (!text) {
+    return "";
+  }
+
+  if (hasSiteAdapter("newyorker")) {
+    const trimmed = trimNewYorkerBlockAtMarker(text);
+    if (trimmed.text) {
+      return normalizeText(trimmed.text);
+    }
+  }
+
+  return normalizeText(text);
+}
+
+function collectStructuredProgressBlockCandidates(progressExtraction, range) {
+  const candidates = [];
+  const seen = new Set();
+
+  if (progressExtraction && Array.isArray(progressExtraction.blocks)) {
+    for (const block of progressExtraction.blocks) {
+      if (!(block.node instanceof Element) || !block.node.contains(range.endContainer)) {
+        continue;
+      }
+      pushUniqueElement(candidates, seen, block.node);
+    }
+  }
+
+  const anchorNodes = [
+    getElementForNode(range.endContainer),
+    getElementForNode(range.startContainer),
+    getElementForNode(range.commonAncestorContainer)
+  ];
+
+  for (const anchorNode of anchorNodes) {
+    let current = anchorNode;
+    let depth = 0;
+
+    while (current && current !== document.body && depth < 8) {
+      const words = countWords(current.textContent);
+      if (
+        STRUCTURED_PROGRESS_TAGS.has(current.tagName) &&
+        words >= 2 &&
+        words <= 450 &&
+        isProbablyVisible(current) &&
+        !hasJunkLabel(current)
+      ) {
+        pushUniqueElement(candidates, seen, current);
+      }
+
+      current = current.parentElement;
+      depth += 1;
+    }
+  }
+
+  return candidates;
+}
+
+function getProgressPositionFromStructuredSnippet(normalizedArticleText, totalWords, prefixText) {
+  const normalizedPrefix = normalizeStructuredProgressText(prefixText);
+  if (!normalizedPrefix) {
+    return null;
+  }
+
+  const maxWindowWords = Math.min(32, Math.max(6, countWords(normalizedPrefix)));
+  for (let windowWords = maxWindowWords; windowWords >= 4; windowWords -= 1) {
+    const snippet = takeLastWords(normalizedPrefix, windowWords);
+    if (!snippet) {
+      continue;
+    }
+
+    const snippetIndex = normalizedArticleText.lastIndexOf(snippet);
+    if (snippetIndex === -1) {
+      continue;
+    }
+
+    return {
+      wordsThrough: Math.min(
+        totalWords,
+        countWords(normalizedArticleText.slice(0, snippetIndex + snippet.length))
+      ),
+      visibleWordsTotal: totalWords
+    };
+  }
+
+  return null;
+}
+
 function getProgressPositionFromStructuredArticle(articleText, progressExtraction, range) {
-  const normalizedArticleText = normalizeText(articleText);
+  const normalizedArticleText = normalizeStructuredProgressText(articleText);
   const totalWords = countWords(normalizedArticleText);
   if (!normalizedArticleText || totalWords <= 0) {
     return null;
+  }
+
+  const candidateBlocks = collectStructuredProgressBlockCandidates(progressExtraction, range);
+  for (const blockNode of candidateBlocks) {
+    const partialRange = document.createRange();
+    partialRange.selectNodeContents(blockNode);
+    partialRange.setEnd(range.endContainer, range.endOffset);
+    const normalizedPrefix = normalizeStructuredProgressText(partialRange.toString());
+    if (!normalizedPrefix) {
+      continue;
+    }
+
+    const normalizedBlockText = normalizeStructuredProgressText(blockNode.textContent || "");
+    if (normalizedBlockText) {
+      const firstBlockIndex = normalizedArticleText.indexOf(normalizedBlockText);
+      const lastBlockIndex = normalizedArticleText.lastIndexOf(normalizedBlockText);
+      if (firstBlockIndex !== -1 && firstBlockIndex === lastBlockIndex) {
+        const wordsIntoBlock = countWords(normalizedPrefix);
+        const wordsBeforeBlock = countWords(normalizedArticleText.slice(0, firstBlockIndex));
+
+        return {
+          wordsThrough: Math.min(totalWords, wordsBeforeBlock + wordsIntoBlock),
+          visibleWordsTotal: totalWords
+        };
+      }
+    }
+
+    const snippetPosition = getProgressPositionFromStructuredSnippet(
+      normalizedArticleText,
+      totalWords,
+      normalizedPrefix
+    );
+    if (snippetPosition) {
+      return snippetPosition;
+    }
+  }
+
+  if (!(progressExtraction && progressExtraction.root instanceof Element) || !progressExtraction.root.contains(range.endContainer)) {
+    return null;
+  }
+
+  const partialRange = document.createRange();
+  partialRange.selectNodeContents(progressExtraction.root);
+  partialRange.setEnd(range.endContainer, range.endOffset);
+  const rootPosition = getProgressPositionFromStructuredSnippet(
+    normalizedArticleText,
+    totalWords,
+    partialRange.toString()
+  );
+  if (rootPosition) {
+    return rootPosition;
   }
 
   if (Array.isArray(progressExtraction.blocks)) {
@@ -1248,7 +1410,7 @@ function getProgressPositionFromStructuredArticle(articleText, progressExtractio
         continue;
       }
 
-      const normalizedBlockText = normalizeText(block.text);
+      const normalizedBlockText = normalizeStructuredProgressText(block.text);
       if (!normalizedBlockText) {
         break;
       }
@@ -1261,7 +1423,7 @@ function getProgressPositionFromStructuredArticle(articleText, progressExtractio
       const partialRange = document.createRange();
       partialRange.selectNodeContents(block.node);
       partialRange.setEnd(range.endContainer, range.endOffset);
-      const wordsIntoBlock = countWords(partialRange.toString());
+      const wordsIntoBlock = countWords(normalizeStructuredProgressText(partialRange.toString()));
       const wordsBeforeBlock = countWords(normalizedArticleText.slice(0, blockIndex));
 
       return {
@@ -1269,35 +1431,6 @@ function getProgressPositionFromStructuredArticle(articleText, progressExtractio
         visibleWordsTotal: totalWords
       };
     }
-  }
-
-  if (!(progressExtraction.root instanceof Element) || !progressExtraction.root.contains(range.endContainer)) {
-    return null;
-  }
-
-  const partialRange = document.createRange();
-  partialRange.selectNodeContents(progressExtraction.root);
-  partialRange.setEnd(range.endContainer, range.endOffset);
-  const normalizedPrefix = normalizeText(partialRange.toString());
-  if (!normalizedPrefix) {
-    return null;
-  }
-
-  const maxWindowWords = Math.min(24, Math.max(6, countWords(normalizedPrefix)));
-  for (let windowWords = maxWindowWords; windowWords >= 4; windowWords -= 1) {
-    const snippet = takeLastWords(normalizedPrefix, windowWords);
-    if (!snippet) {
-      continue;
-    }
-    const snippetIndex = normalizedArticleText.lastIndexOf(snippet);
-    if (snippetIndex === -1) {
-      continue;
-    }
-
-    return {
-      wordsThrough: Math.min(totalWords, countWords(normalizedArticleText.slice(0, snippetIndex + snippet.length))),
-      visibleWordsTotal: totalWords
-    };
   }
 
   return null;
@@ -1929,6 +2062,38 @@ function getSelectionProgress(forceRefresh) {
 
   const analysis = getPageAnalysis(Boolean(forceRefresh));
   const progressExtraction = getProgressExtraction(analysis);
+  const structuredTotalWords =
+    hasSiteAdapter("newyorker") &&
+    typeof analysis.structuredArticleText === "string" &&
+    analysis.structuredArticleText
+      ? countWords(analysis.structuredArticleText)
+      : null;
+
+  if (
+    hasSiteAdapter("newyorker") &&
+    Number.isFinite(structuredTotalWords) &&
+    structuredTotalWords > 0
+  ) {
+    const structuredPosition = getProgressPositionFromStructuredArticle(
+      analysis.structuredArticleText,
+      progressExtraction,
+      range
+    );
+    if (structuredPosition && structuredPosition.visibleWordsTotal > 0) {
+      const wordsRead = Math.max(
+        0,
+        Math.min(structuredTotalWords, Math.round(structuredPosition.wordsThrough))
+      );
+      const remainingWords = Math.max(0, structuredTotalWords - wordsRead);
+
+      return {
+        percent: Math.max(0, Math.min(100, Math.round((wordsRead / structuredTotalWords) * 100))),
+        totalWords: structuredTotalWords,
+        wordsRead,
+        remainingWords
+      };
+    }
+  }
 
   if (
     !progressExtraction ||
@@ -1940,17 +2105,6 @@ function getSelectionProgress(forceRefresh) {
   }
 
   let position = getProgressPositionFromBlocks(progressExtraction.blocks, range);
-  if (
-    hasSiteAdapter("newyorker") &&
-    typeof analysis.structuredArticleText === "string" &&
-    analysis.structuredArticleText
-  ) {
-    position = getProgressPositionFromStructuredArticle(
-      analysis.structuredArticleText,
-      progressExtraction,
-      range
-    ) || position;
-  }
   if (!position) {
     position = getProgressPositionFromRoot(progressExtraction.root, range);
   }
@@ -1958,12 +2112,6 @@ function getSelectionProgress(forceRefresh) {
     return null;
   }
 
-  const structuredTotalWords =
-    hasSiteAdapter("newyorker") &&
-    typeof analysis.structuredArticleText === "string" &&
-    analysis.structuredArticleText
-      ? countWords(analysis.structuredArticleText)
-      : null;
   const totalWords =
     Number.isFinite(structuredTotalWords) && structuredTotalWords > 0
       ? structuredTotalWords
