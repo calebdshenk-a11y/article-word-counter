@@ -2,7 +2,7 @@
 
 (() => {
 
-var CONTENT_SCRIPT_VERSION = 13;
+var CONTENT_SCRIPT_VERSION = 14;
 var REQUIRED_SELECTION_WORDS = 1;
 var NEWYORKER_END_MARKER_PATTERN = /^[♦◆❖◊]\s*$/;
 var NEWYORKER_END_MARKER_ANYWHERE_PATTERN = /[♦◆❖◊]/;
@@ -896,6 +896,15 @@ function buildNewYorkerCountExtraction(baselineParagraphs) {
     return null;
   }
 
+  const jsonLdExtraction = buildJsonLdExtraction();
+  if (jsonLdExtraction) {
+    return {
+      ...jsonLdExtraction,
+      countSource: "newyorker-jsonld-article-body",
+      score: Math.max(jsonLdExtraction.score || 0, 30)
+    };
+  }
+
   const pageContextWords = normalizeAdapterWordCount(adapter, extractNewYorkerPageContextCopyCount());
   if (pageContextWords) {
     return buildHintExtraction(pageContextWords, baselineParagraphs, {
@@ -926,11 +935,6 @@ function buildNewYorkerCountExtraction(baselineParagraphs) {
       rootSelector: JSON_LD_SELECTOR,
       score: 28
     });
-  }
-
-  const jsonLdExtraction = buildJsonLdExtraction();
-  if (jsonLdExtraction) {
-    return jsonLdExtraction;
   }
 
   return null;
@@ -1217,6 +1221,88 @@ function pickBestExtractionByWords(extractions) {
   return best;
 }
 
+function takeLastWords(text, maxWords) {
+  const normalized = normalizeText(text);
+  if (!normalized) {
+    return "";
+  }
+
+  const words = normalized.split(" ");
+  if (words.length <= maxWords) {
+    return normalized;
+  }
+
+  return words.slice(words.length - maxWords).join(" ");
+}
+
+function getProgressPositionFromStructuredArticle(articleText, progressExtraction, range) {
+  const normalizedArticleText = normalizeText(articleText);
+  const totalWords = countWords(normalizedArticleText);
+  if (!normalizedArticleText || totalWords <= 0) {
+    return null;
+  }
+
+  if (Array.isArray(progressExtraction.blocks)) {
+    for (const block of progressExtraction.blocks) {
+      if (!(block.node instanceof Element) || !block.node.contains(range.endContainer)) {
+        continue;
+      }
+
+      const normalizedBlockText = normalizeText(block.text);
+      if (!normalizedBlockText) {
+        break;
+      }
+
+      const blockIndex = normalizedArticleText.indexOf(normalizedBlockText);
+      if (blockIndex === -1) {
+        break;
+      }
+
+      const partialRange = document.createRange();
+      partialRange.selectNodeContents(block.node);
+      partialRange.setEnd(range.endContainer, range.endOffset);
+      const wordsIntoBlock = countWords(partialRange.toString());
+      const wordsBeforeBlock = countWords(normalizedArticleText.slice(0, blockIndex));
+
+      return {
+        wordsThrough: Math.min(totalWords, wordsBeforeBlock + wordsIntoBlock),
+        visibleWordsTotal: totalWords
+      };
+    }
+  }
+
+  if (!(progressExtraction.root instanceof Element) || !progressExtraction.root.contains(range.endContainer)) {
+    return null;
+  }
+
+  const partialRange = document.createRange();
+  partialRange.selectNodeContents(progressExtraction.root);
+  partialRange.setEnd(range.endContainer, range.endOffset);
+  const normalizedPrefix = normalizeText(partialRange.toString());
+  if (!normalizedPrefix) {
+    return null;
+  }
+
+  const maxWindowWords = Math.min(24, Math.max(6, countWords(normalizedPrefix)));
+  for (let windowWords = maxWindowWords; windowWords >= 4; windowWords -= 1) {
+    const snippet = takeLastWords(normalizedPrefix, windowWords);
+    if (!snippet) {
+      continue;
+    }
+    const snippetIndex = normalizedArticleText.lastIndexOf(snippet);
+    if (snippetIndex === -1) {
+      continue;
+    }
+
+    return {
+      wordsThrough: Math.min(totalWords, countWords(normalizedArticleText.slice(0, snippetIndex + snippet.length))),
+      visibleWordsTotal: totalWords
+    };
+  }
+
+  return null;
+}
+
 function chooseBestExtraction(primaryRoot, primaryScore, primarySelector = null) {
   const primary = evaluateRoot(primaryRoot, primaryScore, "candidate", {
     rootSelector: primarySelector
@@ -1303,6 +1389,7 @@ function chooseBestExtraction(primaryRoot, primaryScore, primarySelector = null)
   return {
     extraction: chosen,
     progressExtraction,
+    structuredArticleText: hasSiteAdapter("newyorker") && jsonLd ? jsonLd.text : null,
     debug: buildExtractionDebug(primary, alternatives, chosen, decision, progressExtraction)
   };
 }
@@ -1669,6 +1756,7 @@ function buildFallbackAnalysis(error) {
     url: window.location.href,
     extraction,
     progressExtraction: null,
+    structuredArticleText: null,
     debug: buildFallbackDebug(extraction, message),
     generatedAt: new Date().toISOString()
   };
@@ -1685,7 +1773,7 @@ function getPageAnalysis(forceRefresh) {
       score: primaryScore,
       selector: primarySelector
     } = pickMainContentRoot();
-    const { extraction, progressExtraction, debug } = chooseBestExtraction(
+    const { extraction, progressExtraction, structuredArticleText, debug } = chooseBestExtraction(
       primaryRoot,
       primaryScore,
       primarySelector
@@ -1696,6 +1784,7 @@ function getPageAnalysis(forceRefresh) {
       url: window.location.href,
       extraction,
       progressExtraction,
+      structuredArticleText,
       debug,
       generatedAt: new Date().toISOString()
     };
@@ -1851,6 +1940,17 @@ function getSelectionProgress(forceRefresh) {
   }
 
   let position = getProgressPositionFromBlocks(progressExtraction.blocks, range);
+  if (
+    hasSiteAdapter("newyorker") &&
+    typeof analysis.structuredArticleText === "string" &&
+    analysis.structuredArticleText
+  ) {
+    position = getProgressPositionFromStructuredArticle(
+      analysis.structuredArticleText,
+      progressExtraction,
+      range
+    ) || position;
+  }
   if (!position) {
     position = getProgressPositionFromRoot(progressExtraction.root, range);
   }
@@ -1858,13 +1958,28 @@ function getSelectionProgress(forceRefresh) {
     return null;
   }
 
+  const structuredTotalWords =
+    hasSiteAdapter("newyorker") &&
+    typeof analysis.structuredArticleText === "string" &&
+    analysis.structuredArticleText
+      ? countWords(analysis.structuredArticleText)
+      : null;
+  const totalWords =
+    Number.isFinite(structuredTotalWords) && structuredTotalWords > 0
+      ? structuredTotalWords
+      : analysis.extraction.words;
   const ratio = Math.max(0, Math.min(1, position.wordsThrough / position.visibleWordsTotal));
-  const totalWords = analysis.extraction.words;
-  const wordsRead = Math.max(0, Math.min(totalWords, Math.round(totalWords * ratio)));
+  const wordsRead = Math.max(
+    0,
+    Math.min(
+      totalWords,
+      structuredTotalWords ? Math.round(position.wordsThrough) : Math.round(totalWords * ratio)
+    )
+  );
   const remainingWords = Math.max(0, totalWords - wordsRead);
 
   return {
-    percent: Math.max(0, Math.min(100, Math.round(ratio * 100))),
+    percent: Math.max(0, Math.min(100, Math.round((wordsRead / totalWords) * 100))),
     totalWords,
     wordsRead,
     remainingWords
