@@ -2,8 +2,9 @@
 
 (() => {
 
-var CONTENT_SCRIPT_VERSION = 10;
+var CONTENT_SCRIPT_VERSION = 11;
 var REQUIRED_SELECTION_WORDS = 1;
+var NEWYORKER_END_MARKER_PATTERN = /^[♦◆❖◊]\s*$/;
 
 var JUNK_KEYWORDS =
   /\b(ad|ads|advert|promo|sponsor|newsletter|subscribe|header|footer|nav|menu|sidebar|related|recommend|popular|trending|cookie|consent|comment|share|social|banner|breadcrumb|outbrain|taboola|paywall)\b/i;
@@ -1325,6 +1326,14 @@ function looksLikeByline(text) {
   return /^by\s+[a-z]/i.test(text) || /^\w+\s+\|\s+\w+/.test(text);
 }
 
+function isNewYorkerEndMarker(text, wordsCollected) {
+  return Boolean(
+    hasSiteAdapter("newyorker") &&
+      wordsCollected >= 250 &&
+      NEWYORKER_END_MARKER_PATTERN.test(normalizeText(text))
+  );
+}
+
 function collectLegacyArticleText(root) {
   const blocks = [];
   let current = "";
@@ -1439,6 +1448,7 @@ function collectLegacyArticleText(root) {
 function collectArticleBlocks(root) {
   const blocks = [];
   const candidates = root.querySelectorAll(BLOCK_SELECTOR);
+  let wordsCollected = 0;
 
   for (const node of candidates) {
     if (!isProbablyVisible(node)) {
@@ -1452,6 +1462,10 @@ function collectArticleBlocks(root) {
     }
 
     const text = normalizeText(node.textContent);
+    if (isNewYorkerEndMarker(text, wordsCollected)) {
+      break;
+    }
+
     const words = countWords(text);
     if (words < 2) {
       continue;
@@ -1471,6 +1485,7 @@ function collectArticleBlocks(root) {
     }
 
     blocks.push({ node, text, words });
+    wordsCollected += words;
   }
 
   return blocks;
