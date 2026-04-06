@@ -6,7 +6,7 @@ const SKIM_READING_WPM = 650;
 const NORMAL_READING_WPM = 500;
 const DEEP_READING_WPM = 350;
 const DEFAULT_READING_WPM = NORMAL_READING_WPM;
-const CONTENT_SCRIPT_VERSION = 8;
+const CONTENT_SCRIPT_VERSION = 9;
 const DEBUG_MODE_KEY = "debugModeEnabled";
 const READING_SPEED_BY_TAB_KEY = "readerWpmByTab";
 
@@ -90,12 +90,13 @@ function formatDebugOption(option) {
 
   const source = option.source || "unknown";
   const adapter = option.adapterId ? ` (${option.adapterId})` : "";
+  const countSource = option.countSource ? ` [${option.countSource}]` : "";
   const rootTag = option.rootTag ? `<${option.rootTag}>` : "<unknown>";
   const rootSelector = option.rootSelector ? ` via ${option.rootSelector}` : "";
   const words = formatWordCount(option.words);
   const blocks = Number.isFinite(option.paragraphs) ? option.paragraphs : "--";
 
-  return `${source}${adapter}: ${words} words, ${blocks} blocks, ${rootTag}${rootSelector}`;
+  return `${source}${adapter}${countSource}: ${words} words, ${blocks} blocks, ${rootTag}${rootSelector}`;
 }
 
 function renderDebug(result, statusMessage = "") {
@@ -126,8 +127,10 @@ function renderDebug(result, statusMessage = "") {
   const alternatives = Array.isArray(debug.topAlternatives) ? debug.topAlternatives : [];
 
   const lines = [
+    `Bootstrap: ${debug.bootstrap || "unknown"}`,
     `Decision: ${debug.decision || "n/a"}`,
-    `Chosen: ${formatDebugOption(chosen)}`
+    `Chosen: ${formatDebugOption(chosen)}`,
+    `Progress root: ${formatDebugOption(debug.progressSource)}`
   ];
 
   if (alternatives.length === 0) {
@@ -148,6 +151,7 @@ function setBusyState() {
   clearCountHoverDetails();
   metaEl.textContent = "Analyzing the current page...";
   progressValueEl.textContent = "Checking progress";
+  progressTimeEl.hidden = true;
   progressTimeEl.textContent = "-- left";
   progressMetaEl.textContent = "Looking for a selected word in the article.";
   renderDebug(lastResult, "Analyzing the current page...");
@@ -182,17 +186,20 @@ function setSpeedUi(wpm) {
   setPresetUi(wpm);
 }
 
-async function resolveActiveTabId() {
+async function resolveActiveTab() {
   try {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    const activeTab = tabs[0];
-    if (!activeTab || typeof activeTab.id !== "number") {
+    if (!tabs[0] || typeof tabs[0].id !== "number") {
       return null;
     }
-    return activeTab.id;
+    return tabs[0];
   } catch (_error) {
     return null;
   }
+}
+
+function isInjectableTabUrl(url) {
+  return typeof url === "string" && /^https?:\/\//i.test(url);
 }
 
 function toSpeedByTabMap(value) {
@@ -280,12 +287,14 @@ function renderSelectionProgress(progress) {
 
   if (!progress) {
     progressValueEl.textContent = "No word selected";
+    progressTimeEl.hidden = true;
     progressTimeEl.textContent = "-- left";
     progressMetaEl.textContent = "Double-click a single word in the article to set progress.";
     return;
   }
 
   progressValueEl.textContent = `${progress.percent}% done`;
+  progressTimeEl.hidden = false;
   progressTimeEl.textContent = formatRemainingTimeFromWords(progress.remainingWords, currentWpm);
 
   if (progress.remainingWords <= 0) {
@@ -306,6 +315,8 @@ function setResultState(result) {
 
   if (result.extractionSource === "metadata") {
     metaEl.textContent = "Used publisher word-count metadata.";
+  } else if (result.countSource === "jsonld-word-count") {
+    metaEl.textContent = "Used structured article word-count metadata.";
   } else if (result.extractionSource === "jsonld") {
     metaEl.textContent = `Used structured article data with ${result.paragraphs} text blocks.`;
   } else {
@@ -408,29 +419,82 @@ async function pingContentScript(tabId) {
     const response = await chrome.tabs.sendMessage(tabId, {
       type: "PING_ARTICLE_WORD_COUNTER"
     });
-    return Boolean(response && response.ok && response.version === CONTENT_SCRIPT_VERSION);
+    if (!response || !response.ok) {
+      return { ok: false, reason: "no-response" };
+    }
+
+    if (response.version !== CONTENT_SCRIPT_VERSION) {
+      return {
+        ok: false,
+        reason: "version-mismatch",
+        detectedVersion: response.version
+      };
+    }
+
+    return {
+      ok: true,
+      bootstrap: "existing-content-script"
+    };
   } catch (_error) {
-    return false;
+    return { ok: false, reason: "send-failed" };
   }
 }
 
-async function ensureAnalyzerInjected(tabId) {
+async function ensureAnalyzerInjected(tab) {
+  if (!tab || typeof tab.id !== "number") {
+    return {
+      ok: false,
+      reason: "no-tab",
+      message: "No active tab found."
+    };
+  }
+
+  if (!isInjectableTabUrl(tab.url)) {
+    return {
+      ok: false,
+      reason: "restricted-scheme",
+      message: "This page does not allow extension access."
+    };
+  }
+
+  const initialPing = await pingContentScript(tab.id);
+  if (initialPing.ok) {
+    return initialPing;
+  }
+
   try {
     await chrome.scripting.executeScript({
-      target: { tabId },
+      target: { tabId: tab.id },
       files: ["contentScript.js"]
     });
   } catch (_error) {
-    return pingContentScript(tabId);
+    return {
+      ok: false,
+      reason: "bootstrap-failed",
+      message: "The extension could not start on this page."
+    };
   }
 
-  return pingContentScript(tabId);
+  const recoveredPing = await pingContentScript(tab.id);
+  if (recoveredPing.ok) {
+    return {
+      ok: true,
+      bootstrap: "execute-script-recovery"
+    };
+  }
+
+  return {
+    ok: false,
+    reason: recoveredPing.reason || "bootstrap-failed",
+    message: "The extension could not start on this page."
+  };
 }
 
 async function fetchWordCount() {
   setBusyState();
 
-  const activeTabId = await resolveActiveTabId();
+  const activeTab = await resolveActiveTab();
+  const activeTabId = activeTab && typeof activeTab.id === "number" ? activeTab.id : null;
   currentTabId = activeTabId;
 
   if (typeof activeTabId !== "number") {
@@ -438,9 +502,9 @@ async function fetchWordCount() {
     return;
   }
 
-  const isReady = await ensureAnalyzerInjected(activeTabId);
-  if (!isReady) {
-    setErrorState("This page is restricted or not readable by the extension.");
+  const readiness = await ensureAnalyzerInjected(activeTab);
+  if (!readiness.ok) {
+    setErrorState(readiness.message || "The extension could not start on this page.");
     return;
   }
 
@@ -462,18 +526,23 @@ async function fetchWordCount() {
     }
 
     if (!response || !response.ok) {
-      const errorMessage = response && response.error ? response.error : "Unable to read this page.";
+      const errorMessage =
+        response && response.error
+          ? `Could not analyze this article: ${response.error}`
+          : "Could not analyze this article.";
       setErrorState(errorMessage);
       await wait(30);
       renderSelectionProgress(await requestTabProgress(activeTabId));
       return;
     }
 
+    response.debug = response.debug || {};
+    response.debug.bootstrap = readiness.bootstrap;
     setResultState(response);
     await wait(30);
     renderSelectionProgress(await requestTabProgress(activeTabId));
   } catch (_error) {
-    setErrorState("This page is restricted or not readable by the extension.");
+    setErrorState("The extension could not reach the page analyzer.");
     await wait(30);
     renderSelectionProgress(await requestTabProgress(activeTabId));
   }
@@ -489,7 +558,8 @@ countEl.addEventListener("mouseenter", showExactWordCount);
 countEl.addEventListener("mouseleave", showRoundedWordCount);
 
 document.addEventListener("DOMContentLoaded", async () => {
-  currentTabId = await resolveActiveTabId();
+  const activeTab = await resolveActiveTab();
+  currentTabId = activeTab && typeof activeTab.id === "number" ? activeTab.id : null;
   currentWpm = await loadReadingSpeed(currentTabId);
   debugModeEnabled = await loadDebugMode();
   setSpeedUi(currentWpm);

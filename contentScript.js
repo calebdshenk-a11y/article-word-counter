@@ -2,7 +2,7 @@
 
 (() => {
 
-var CONTENT_SCRIPT_VERSION = 8;
+var CONTENT_SCRIPT_VERSION = 9;
 var REQUIRED_SELECTION_WORDS = 1;
 
 var JUNK_KEYWORDS =
@@ -242,6 +242,10 @@ function siteAdaptersForCurrentHost() {
   );
 }
 
+function hasSiteAdapter(adapterId) {
+  return siteAdaptersForCurrentHost().some((adapter) => adapter.id === adapterId);
+}
+
 function semanticRootSelectorsForCurrentHost() {
   const selectors = [...BASE_SEMANTIC_ROOT_SELECTORS];
   for (const adapter of siteAdaptersForCurrentHost()) {
@@ -351,7 +355,8 @@ function evaluateRoot(root, score = 0, source = "candidate", details = {}) {
     source,
     rootTag: root.tagName.toLowerCase(),
     rootSelector: details.rootSelector || null,
-    adapterId: details.adapterId || null
+    adapterId: details.adapterId || null,
+    countSource: details.countSource || `dom-${source}`
   };
 }
 
@@ -369,7 +374,8 @@ function evaluateLegacyRoot(root, score = 0, details = {}) {
     source: "legacy",
     rootTag: root.tagName.toLowerCase(),
     rootSelector: details.rootSelector || null,
-    adapterId: details.adapterId || null
+    adapterId: details.adapterId || null,
+    countSource: details.countSource || "dom-legacy"
   };
 }
 
@@ -515,7 +521,8 @@ function buildJsonLdExtraction() {
     score: 26,
     source: "jsonld",
     rootSelector: JSON_LD_SELECTOR,
-    adapterId: null
+    adapterId: null,
+    countSource: "jsonld-article-body"
   };
 }
 
@@ -673,7 +680,7 @@ function extractWsjWordCountHint() {
   return best;
 }
 
-function extractNewYorkerWordCountHint() {
+function extractNewYorkerPageContextCopyCount() {
   try {
     const pageContext = globalThis.window && window.cns && window.cns.pageContext;
     const slug = window.location.pathname.split("/").filter(Boolean).pop() || "";
@@ -684,36 +691,6 @@ function extractNewYorkerWordCountHint() {
 
     if (hintedCopyCount && (!slug || !contextSlug || slug === contextSlug)) {
       return hintedCopyCount;
-    }
-  } catch (_error) {
-    // Fall back to scanning inline scripts below.
-  }
-
-  try {
-    const dataLayer = globalThis.window && Array.isArray(window.dataLayer) ? window.dataLayer : [];
-    const path = window.location.pathname;
-
-    for (const entry of dataLayer) {
-      if (!entry || typeof entry !== "object") {
-        continue;
-      }
-
-      const content = entry.content && typeof entry.content === "object" ? entry.content : null;
-      const canonical =
-        entry.page && typeof entry.page === "object" && typeof entry.page.canonical === "string"
-          ? entry.page.canonical
-          : "";
-      const hinted = content ? parseCountValue(content.wordCount) : null;
-
-      if (
-        hinted &&
-        ((!path && !canonical) ||
-          !canonical ||
-          canonical.includes(path) ||
-          content.contentType === "article")
-      ) {
-        return hinted;
-      }
     }
   } catch (_error) {
     // Fall back to scanning inline scripts below.
@@ -754,6 +731,41 @@ function extractNewYorkerWordCountHint() {
     }
   }
 
+  return null;
+}
+
+function extractNewYorkerDataLayerWordCount() {
+  try {
+    const dataLayer = globalThis.window && Array.isArray(window.dataLayer) ? window.dataLayer : [];
+    const path = window.location.pathname;
+
+    for (const entry of dataLayer) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+
+      const content = entry.content && typeof entry.content === "object" ? entry.content : null;
+      const canonical =
+        entry.page && typeof entry.page === "object" && typeof entry.page.canonical === "string"
+          ? entry.page.canonical
+          : "";
+      const hinted = content ? parseCountValue(content.wordCount) : null;
+
+      if (
+        hinted &&
+        ((!path && !canonical) ||
+          !canonical ||
+          canonical.includes(path) ||
+          content.contentType === "article")
+      ) {
+        return hinted;
+      }
+    }
+  } catch (_error) {
+    // Fall back to scanning inline scripts below.
+  }
+
+  const scripts = document.querySelectorAll(INLINE_SCRIPT_SELECTOR);
   for (const script of scripts) {
     const text = script.textContent || "";
     if (!text.includes('"event":"data-layer-loaded"')) {
@@ -769,6 +781,10 @@ function extractNewYorkerWordCountHint() {
   }
 
   return null;
+}
+
+function extractNewYorkerWordCountHint() {
+  return extractNewYorkerPageContextCopyCount() || extractNewYorkerDataLayerWordCount();
 }
 
 function extractAdapterWordCountHint(adapter) {
@@ -798,6 +814,30 @@ function normalizeAdapterWordCount(adapter, hintedWords) {
   return hintedWords;
 }
 
+function buildHintExtraction(words, baselineParagraphs, details) {
+  if (!Number.isFinite(words)) {
+    return null;
+  }
+
+  const paragraphEstimate = Math.max(
+    baselineParagraphs || 1,
+    Math.min(120, Math.round(words / 90))
+  );
+
+  return {
+    root: document.body,
+    rootTag: details.rootTag || (details.source === "jsonld" ? "json-ld" : "publisher"),
+    rootSelector: details.rootSelector || null,
+    adapterId: details.adapterId || null,
+    text: "",
+    words,
+    paragraphs: paragraphEstimate,
+    score: Number.isFinite(details.score) ? details.score : 28,
+    source: details.source || "metadata",
+    countSource: details.countSource || details.source || "metadata"
+  };
+}
+
 function buildPublisherHintExtraction(baselineParagraphs) {
   const hints = [];
   const jsonLdWordCount = extractJsonLdWordCountHint();
@@ -805,8 +845,10 @@ function buildPublisherHintExtraction(baselineParagraphs) {
     hints.push({
       words: jsonLdWordCount,
       source: "jsonld",
+      countSource: "jsonld-word-count",
       adapterId: null,
-      rootSelector: JSON_LD_SELECTOR
+      rootSelector: JSON_LD_SELECTOR,
+      priority: 100
     });
   }
 
@@ -819,8 +861,10 @@ function buildPublisherHintExtraction(baselineParagraphs) {
     hints.push({
       words: normalized,
       source: "metadata",
+      countSource: `${adapter.id}-metadata`,
       adapterId: adapter.id,
-      rootSelector: adapter.metadataSelectorHint || INLINE_SCRIPT_SELECTOR
+      rootSelector: adapter.metadataSelectorHint || INLINE_SCRIPT_SELECTOR,
+      priority: 200
     });
   }
 
@@ -830,27 +874,71 @@ function buildPublisherHintExtraction(baselineParagraphs) {
 
   let bestHint = hints[0];
   for (const hint of hints) {
-    if (hint.words > bestHint.words) {
+    if (
+      hint.priority > bestHint.priority ||
+      (hint.priority === bestHint.priority && hint.words > bestHint.words)
+    ) {
       bestHint = hint;
     }
   }
 
-  const paragraphEstimate = Math.max(
-    baselineParagraphs || 1,
-    Math.min(120, Math.round(bestHint.words / 90))
-  );
+  return buildHintExtraction(bestHint.words, baselineParagraphs, bestHint);
+}
 
-  return {
-    root: document.body,
-    rootTag: "publisher",
-    rootSelector: bestHint.rootSelector,
-    adapterId: bestHint.adapterId,
-    text: "",
-    words: bestHint.words,
-    paragraphs: paragraphEstimate,
-    score: 28,
-    source: "metadata"
-  };
+function buildNewYorkerCountExtraction(baselineParagraphs) {
+  const adapter = siteAdaptersForCurrentHost().find((candidate) => candidate.id === "newyorker");
+  if (!adapter) {
+    return null;
+  }
+
+  const pageContextWords = normalizeAdapterWordCount(adapter, extractNewYorkerPageContextCopyCount());
+  if (pageContextWords) {
+    return buildHintExtraction(pageContextWords, baselineParagraphs, {
+      source: "metadata",
+      countSource: "newyorker-page-context",
+      adapterId: adapter.id,
+      rootSelector: "window.cns.pageContext.content.copyCount",
+      score: 30
+    });
+  }
+
+  const dataLayerWords = normalizeAdapterWordCount(adapter, extractNewYorkerDataLayerWordCount());
+  if (dataLayerWords) {
+    return buildHintExtraction(dataLayerWords, baselineParagraphs, {
+      source: "metadata",
+      countSource: "newyorker-data-layer",
+      adapterId: adapter.id,
+      rootSelector: "window.dataLayer[].content.wordCount",
+      score: 29
+    });
+  }
+
+  const jsonLdWordCount = extractJsonLdWordCountHint();
+  if (jsonLdWordCount) {
+    return buildHintExtraction(jsonLdWordCount, baselineParagraphs, {
+      source: "jsonld",
+      countSource: "jsonld-word-count",
+      rootSelector: JSON_LD_SELECTOR,
+      score: 28
+    });
+  }
+
+  const jsonLdExtraction = buildJsonLdExtraction();
+  if (jsonLdExtraction) {
+    return jsonLdExtraction;
+  }
+
+  return null;
+}
+
+function buildPreferredCountExtraction(baselineParagraphs) {
+  if (hasSiteAdapter("newyorker")) {
+    return buildNewYorkerCountExtraction(baselineParagraphs) || buildPublisherHintExtraction(
+      baselineParagraphs
+    );
+  }
+
+  return buildPublisherHintExtraction(baselineParagraphs);
 }
 
 function pickBestSemanticRoot() {
@@ -1055,6 +1143,7 @@ function summarizeExtractionForDebug(extraction) {
   }
   return {
     source: extraction.source,
+    countSource: extraction.countSource || extraction.source,
     words: extraction.words,
     paragraphs: extraction.paragraphs,
     score: Math.round(extraction.score || 0),
@@ -1075,6 +1164,7 @@ function isSameExtraction(a, b) {
 
   return (
     a.source === b.source &&
+    (a.countSource || "") === (b.countSource || "") &&
     a.words === b.words &&
     a.paragraphs === b.paragraphs &&
     (a.rootTag || "") === (b.rootTag || "") &&
@@ -1083,7 +1173,7 @@ function isSameExtraction(a, b) {
   );
 }
 
-function buildExtractionDebug(primary, alternatives, chosen, decision) {
+function buildExtractionDebug(primary, alternatives, chosen, decision, progressExtraction) {
   const topAlternatives = [primary, ...alternatives]
     .filter((option) => option && !isSameExtraction(option, chosen))
     .sort((a, b) => b.words - a.words)
@@ -1094,6 +1184,7 @@ function buildExtractionDebug(primary, alternatives, chosen, decision) {
     decision,
     chosen: summarizeExtractionForDebug(chosen),
     primary: summarizeExtractionForDebug(primary),
+    progressSource: summarizeExtractionForDebug(progressExtraction),
     topAlternatives
   };
 }
@@ -1114,10 +1205,10 @@ function chooseBestExtraction(primaryRoot, primaryScore, primarySelector = null)
   const semantic = pickBestSemanticRoot();
   const ancestor = pickBestAncestorRoot(primary.root);
   const jsonLd = buildJsonLdExtraction();
-  const metadata = buildPublisherHintExtraction(primary.paragraphs);
+  const preferredCount = buildPreferredCountExtraction(primary.paragraphs);
   const legacy = pickBestLegacyExtraction();
 
-  const alternatives = [semantic, ancestor, jsonLd, metadata, legacy].filter(Boolean);
+  const alternatives = [semantic, ancestor, jsonLd, preferredCount, legacy].filter(Boolean);
   let bestAlternative = null;
   for (const option of alternatives) {
     if (!bestAlternative || option.words > bestAlternative.words) {
@@ -1128,7 +1219,8 @@ function chooseBestExtraction(primaryRoot, primaryScore, primarySelector = null)
   if (!bestAlternative) {
     return {
       extraction: primary,
-      debug: buildExtractionDebug(primary, alternatives, primary, "primary")
+      progressExtraction: primary,
+      debug: buildExtractionDebug(primary, alternatives, primary, "primary", primary)
     };
   }
 
@@ -1144,7 +1236,15 @@ function chooseBestExtraction(primaryRoot, primaryScore, primarySelector = null)
   let chosen = primary;
   let decision = "primary";
 
-  if ((primaryIsDisallowed || primaryLooksWeak) && alternativeClearlyBetter) {
+  if (hasSiteAdapter("newyorker") && preferredCount) {
+    chosen = {
+      ...preferredCount,
+      score: Math.max(primary.score, preferredCount.score || 28)
+    };
+    decision = "newyorker-authoritative-count";
+  }
+
+  if (decision === "primary" && (primaryIsDisallowed || primaryLooksWeak) && alternativeClearlyBetter) {
     const scoreHint = Math.max(
       primary.score,
       Math.min(24, bestAlternative.paragraphs * 1.5 + bestAlternative.words / 200)
@@ -1177,7 +1277,7 @@ function chooseBestExtraction(primaryRoot, primaryScore, primarySelector = null)
   return {
     extraction: chosen,
     progressExtraction,
-    debug: buildExtractionDebug(primary, alternatives, chosen, decision)
+    debug: buildExtractionDebug(primary, alternatives, chosen, decision, progressExtraction)
   };
 }
 
@@ -1403,6 +1503,7 @@ function buildSerializableAnalysis(analysis) {
     confidence: confidenceLevel(extraction.words, extraction.paragraphs, extraction.score),
     rootTag: extraction.rootTag || extraction.root.tagName.toLowerCase(),
     extractionSource: extraction.source,
+    countSource: extraction.countSource || extraction.source,
     rootSelector: extraction.rootSelector || null,
     adapterId: extraction.adapterId || null,
     debug: analysis.debug,
@@ -1417,12 +1518,13 @@ function buildFallbackDebug(extraction, error) {
     decision: extraction && extraction.source === "metadata" ? "fallback-metadata" : "fallback-jsonld",
     chosen: summarizeExtractionForDebug(extraction),
     primary: null,
+    progressSource: null,
     topAlternatives: error ? [{ source: "error", rootTag: "fallback", rootSelector: error }] : []
   };
 }
 
 function buildFallbackAnalysis(error) {
-  const metadata = buildPublisherHintExtraction(0);
+  const metadata = buildPreferredCountExtraction(0);
   const jsonLd = buildJsonLdExtraction();
   const extraction = metadata || jsonLd;
 
