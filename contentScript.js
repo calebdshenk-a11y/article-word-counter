@@ -2,7 +2,7 @@
 
 (() => {
 
-var CONTENT_SCRIPT_VERSION = 16;
+var CONTENT_SCRIPT_VERSION = 17;
 var REQUIRED_SELECTION_WORDS = 1;
 var NEWYORKER_END_MARKER_PATTERN = /^[♦◆❖◊]\s*$/;
 var NEWYORKER_END_MARKER_ANYWHERE_PATTERN = /[♦◆❖◊]/;
@@ -1235,27 +1235,24 @@ function takeLastWords(text, maxWords) {
   return words.slice(words.length - maxWords).join(" ");
 }
 
-var STRUCTURED_PROGRESS_TAGS = new Set([
-  "P",
-  "BLOCKQUOTE",
-  "PRE",
-  "H1",
-  "H2",
-  "H3",
-  "H4",
-  "H5",
-  "H6",
-  "LI",
-  "FIGCAPTION",
-  "DIV"
-]);
-
 function pushUniqueElement(out, seen, node) {
   if (!(node instanceof Element) || seen.has(node)) {
     return;
   }
   seen.add(node);
   out.push(node);
+}
+
+function getVisibleNodeText(node) {
+  if (!(node instanceof Element)) {
+    return "";
+  }
+
+  if (typeof node.innerText === "string" && node.innerText.trim()) {
+    return node.innerText;
+  }
+
+  return node.textContent || "";
 }
 
 function normalizeStructuredProgressText(text) {
@@ -1273,6 +1270,21 @@ function normalizeStructuredProgressText(text) {
   return normalizeText(text);
 }
 
+function isStructuredProgressCandidateElement(node) {
+  if (!(node instanceof Element)) {
+    return false;
+  }
+  if (!isProbablyVisible(node)) {
+    return false;
+  }
+  if (isBoilerplateElement(node) || hasJunkLabel(node)) {
+    return false;
+  }
+
+  const visibleWords = countWords(getVisibleNodeText(node));
+  return visibleWords >= 2 && visibleWords <= 650;
+}
+
 function collectStructuredProgressBlockCandidates(progressExtraction, range) {
   const candidates = [];
   const seen = new Set();
@@ -1287,6 +1299,10 @@ function collectStructuredProgressBlockCandidates(progressExtraction, range) {
   }
 
   const anchorNodes = [
+    getElementForNode(range.startContainer) &&
+    getElementForNode(range.startContainer).closest(BLOCK_SELECTOR),
+    getElementForNode(range.endContainer) &&
+    getElementForNode(range.endContainer).closest(BLOCK_SELECTOR),
     getElementForNode(range.endContainer),
     getElementForNode(range.startContainer),
     getElementForNode(range.commonAncestorContainer)
@@ -1296,15 +1312,8 @@ function collectStructuredProgressBlockCandidates(progressExtraction, range) {
     let current = anchorNode;
     let depth = 0;
 
-    while (current && current !== document.body && depth < 8) {
-      const words = countWords(current.textContent);
-      if (
-        STRUCTURED_PROGRESS_TAGS.has(current.tagName) &&
-        words >= 2 &&
-        words <= 450 &&
-        isProbablyVisible(current) &&
-        !hasJunkLabel(current)
-      ) {
+    while (current && current !== document.body && depth < 18) {
+      if (isStructuredProgressCandidateElement(current)) {
         pushUniqueElement(candidates, seen, current);
       }
 
@@ -1313,7 +1322,7 @@ function collectStructuredProgressBlockCandidates(progressExtraction, range) {
     }
   }
 
-  return candidates;
+  return candidates.sort((a, b) => countWords(getVisibleNodeText(a)) - countWords(getVisibleNodeText(b)));
 }
 
 function getProgressPositionFromStructuredSnippet(normalizedArticleText, totalWords, prefixText) {
@@ -1363,7 +1372,7 @@ function getProgressPositionFromStructuredArticle(articleText, progressExtractio
       continue;
     }
 
-    const normalizedBlockText = normalizeStructuredProgressText(blockNode.textContent || "");
+    const normalizedBlockText = normalizeStructuredProgressText(getVisibleNodeText(blockNode));
     if (normalizedBlockText) {
       const firstBlockIndex = normalizedArticleText.indexOf(normalizedBlockText);
       const lastBlockIndex = normalizedArticleText.lastIndexOf(normalizedBlockText);
