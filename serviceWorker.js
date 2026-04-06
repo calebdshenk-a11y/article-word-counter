@@ -4,7 +4,7 @@ const MIN_READING_WPM = 100;
 const MAX_READING_WPM = 2000;
 const DEFAULT_READING_WPM = 500;
 const READING_SPEED_BY_TAB_KEY = "readerWpmByTab";
-const BADGE_BACKGROUND_COLOR = "#c2410c";
+const BADGE_BACKGROUND_COLOR = "#555555";
 const BADGE_TEXT_COLOR = "#ffffff";
 const DEFAULT_ACTION_TITLE = "Article Word Counter";
 
