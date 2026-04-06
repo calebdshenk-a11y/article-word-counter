@@ -6,7 +6,7 @@ const SKIM_READING_WPM = 650;
 const NORMAL_READING_WPM = 500;
 const DEEP_READING_WPM = 350;
 const DEFAULT_READING_WPM = NORMAL_READING_WPM;
-const CONTENT_SCRIPT_VERSION = 9;
+const CONTENT_SCRIPT_VERSION = 10;
 const DEBUG_MODE_KEY = "debugModeEnabled";
 const READING_SPEED_BY_TAB_KEY = "readerWpmByTab";
 
@@ -402,6 +402,18 @@ async function requestArticleAnalysis(tabId) {
   });
 }
 
+async function requestSelectionProgress(tabId, forceRefresh = false) {
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, {
+      type: "GET_SELECTION_PROGRESS",
+      forceRefresh
+    });
+    return response && response.ok ? response.progress || null : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
 async function requestTabProgress(tabId) {
   try {
     const response = await chrome.runtime.sendMessage({
@@ -540,11 +552,15 @@ async function fetchWordCount() {
     response.debug.bootstrap = readiness.bootstrap;
     setResultState(response);
     await wait(30);
-    renderSelectionProgress(await requestTabProgress(activeTabId));
+    const liveProgress =
+      (await requestSelectionProgress(activeTabId, false)) || (await requestTabProgress(activeTabId));
+    renderSelectionProgress(liveProgress);
   } catch (_error) {
     setErrorState("The extension could not reach the page analyzer.");
     await wait(30);
-    renderSelectionProgress(await requestTabProgress(activeTabId));
+    const liveProgress =
+      (await requestSelectionProgress(activeTabId, false)) || (await requestTabProgress(activeTabId));
+    renderSelectionProgress(liveProgress);
   }
 }
 

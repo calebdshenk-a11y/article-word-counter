@@ -2,7 +2,7 @@
 
 (() => {
 
-var CONTENT_SCRIPT_VERSION = 9;
+var CONTENT_SCRIPT_VERSION = 10;
 var REQUIRED_SELECTION_WORDS = 1;
 
 var JUNK_KEYWORDS =
@@ -1771,15 +1771,20 @@ async function setTabProgress(progress) {
   });
 }
 
+async function syncSelectionProgress(forceRefresh) {
+  const progress = getSelectionProgress(forceRefresh);
+  if (!progress) {
+    await clearTabProgress();
+    return null;
+  }
+
+  await setTabProgress(progress);
+  return progress;
+}
+
 async function updateSelectionProgress(forceRefresh) {
   try {
-    const progress = getSelectionProgress(forceRefresh);
-    if (!progress) {
-      await clearTabProgress();
-      return;
-    }
-
-    await setTabProgress(progress);
+    await syncSelectionProgress(forceRefresh);
   } catch (_error) {
     await clearTabProgress();
   }
@@ -1787,6 +1792,7 @@ async function updateSelectionProgress(forceRefresh) {
 
 var selectionProgressTimer = 0;
 var selectionProgressNeedsRefresh = false;
+var selectionProgressDelayMs = 80;
 
 function clearSelectionProgressTimer() {
   if (selectionProgressTimer) {
@@ -1795,15 +1801,19 @@ function clearSelectionProgressTimer() {
   }
 }
 
-function scheduleSelectionProgressUpdate(forceRefresh) {
+function scheduleSelectionProgressUpdate(forceRefresh, delayMs) {
   selectionProgressNeedsRefresh = selectionProgressNeedsRefresh || Boolean(forceRefresh);
+  if (Number.isFinite(delayMs)) {
+    selectionProgressDelayMs = Math.max(selectionProgressDelayMs, Math.round(delayMs));
+  }
   clearSelectionProgressTimer();
   selectionProgressTimer = window.setTimeout(() => {
     const shouldRefresh = selectionProgressNeedsRefresh;
     selectionProgressNeedsRefresh = false;
+    selectionProgressDelayMs = 80;
     selectionProgressTimer = 0;
     void updateSelectionProgress(shouldRefresh);
-  }, 0);
+  }, selectionProgressDelayMs);
 }
 
 function onDocumentDoubleClick(event) {
@@ -1811,11 +1821,23 @@ function onDocumentDoubleClick(event) {
     void clearTabProgress();
     return;
   }
-  scheduleSelectionProgressUpdate(false);
+  scheduleSelectionProgressUpdate(false, 120);
 }
 
 function onSelectionChange() {
-  scheduleSelectionProgressUpdate(false);
+  scheduleSelectionProgressUpdate(false, 80);
+}
+
+function onDocumentMouseUp(event) {
+  if (isEditableTarget(event.target)) {
+    void clearTabProgress();
+    return;
+  }
+  scheduleSelectionProgressUpdate(false, 120);
+}
+
+function onDocumentKeyUp() {
+  scheduleSelectionProgressUpdate(false, 120);
 }
 
 var onMessage = (message, _sender, sendResponse) => {
@@ -1825,6 +1847,25 @@ var onMessage = (message, _sender, sendResponse) => {
 
   if (message.type === "PING_ARTICLE_WORD_COUNTER") {
     sendResponse({ ok: true, version: CONTENT_SCRIPT_VERSION });
+    return;
+  }
+
+  if (message.type === "GET_SELECTION_PROGRESS") {
+    try {
+      const forceRefresh = Boolean(message.forceRefresh);
+      const progress = getSelectionProgress(forceRefresh);
+      if (progress) {
+        void setTabProgress(progress);
+      } else {
+        void clearTabProgress();
+      }
+      sendResponse({ ok: true, progress: progress || null });
+    } catch (error) {
+      sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : "Unable to read the current selection."
+      });
+    }
     return;
   }
 
@@ -1852,12 +1893,16 @@ if (typeof previousCleanup === "function") {
 
 chrome.runtime.onMessage.addListener(onMessage);
 document.addEventListener("dblclick", onDocumentDoubleClick, true);
+document.addEventListener("mouseup", onDocumentMouseUp, true);
+document.addEventListener("keyup", onDocumentKeyUp, true);
 document.addEventListener("selectionchange", onSelectionChange);
 scheduleSelectionProgressUpdate(false);
 
 globalThis[CLEANUP_KEY] = function cleanupArticleWordCounter() {
   chrome.runtime.onMessage.removeListener(onMessage);
   document.removeEventListener("dblclick", onDocumentDoubleClick, true);
+  document.removeEventListener("mouseup", onDocumentMouseUp, true);
+  document.removeEventListener("keyup", onDocumentKeyUp, true);
   document.removeEventListener("selectionchange", onSelectionChange);
   clearSelectionProgressTimer();
   cachedPageAnalysis = null;
