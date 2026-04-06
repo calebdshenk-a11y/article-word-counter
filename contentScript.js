@@ -2,7 +2,7 @@
 
 (() => {
 
-var CONTENT_SCRIPT_VERSION = 12;
+var CONTENT_SCRIPT_VERSION = 13;
 var REQUIRED_SELECTION_WORDS = 1;
 var NEWYORKER_END_MARKER_PATTERN = /^[♦◆❖◊]\s*$/;
 var NEWYORKER_END_MARKER_ANYWHERE_PATTERN = /[♦◆❖◊]/;
@@ -343,7 +343,8 @@ function scoreCandidates() {
 }
 
 function evaluateRoot(root, score = 0, source = "candidate", details = {}) {
-  const blocks = collectArticleBlocks(root);
+  const blockData = collectArticleBlockData(root);
+  const blocks = blockData.blocks;
   const text = blocks.map((block) => block.text).join("\n\n");
   const words = blocks.reduce((total, block) => total + block.words, 0);
   const paragraphs = blocks.length;
@@ -358,7 +359,8 @@ function evaluateRoot(root, score = 0, source = "candidate", details = {}) {
     rootTag: root.tagName.toLowerCase(),
     rootSelector: details.rootSelector || null,
     adapterId: details.adapterId || null,
-    countSource: details.countSource || `dom-${source}`
+    countSource: details.countSource || `dom-${source}`,
+    endMarkerDetected: Boolean(blockData.endMarkerDetected)
   };
 }
 
@@ -377,7 +379,8 @@ function evaluateLegacyRoot(root, score = 0, details = {}) {
     rootTag: root.tagName.toLowerCase(),
     rootSelector: details.rootSelector || null,
     adapterId: details.adapterId || null,
-    countSource: details.countSource || "dom-legacy"
+    countSource: details.countSource || "dom-legacy",
+    endMarkerDetected: false
   };
 }
 
@@ -1146,6 +1149,7 @@ function summarizeExtractionForDebug(extraction) {
   return {
     source: extraction.source,
     countSource: extraction.countSource || extraction.source,
+    endMarkerDetected: Boolean(extraction.endMarkerDetected),
     words: extraction.words,
     paragraphs: extraction.paragraphs,
     score: Math.round(extraction.score || 0),
@@ -1200,6 +1204,19 @@ function isDomTrackableExtraction(extraction) {
   );
 }
 
+function pickBestExtractionByWords(extractions) {
+  let best = null;
+  for (const extraction of extractions) {
+    if (!extraction) {
+      continue;
+    }
+    if (!best || extraction.words > best.words) {
+      best = extraction;
+    }
+  }
+  return best;
+}
+
 function chooseBestExtraction(primaryRoot, primaryScore, primarySelector = null) {
   const primary = evaluateRoot(primaryRoot, primaryScore, "candidate", {
     rootSelector: primarySelector
@@ -1237,8 +1254,20 @@ function chooseBestExtraction(primaryRoot, primaryScore, primarySelector = null)
 
   let chosen = primary;
   let decision = "primary";
+  const newYorkerDomCandidates = [primary, semantic, ancestor].filter(isDomTrackableExtraction);
+  const newYorkerMarkerExtraction = hasSiteAdapter("newyorker")
+    ? pickBestExtractionByWords(
+        newYorkerDomCandidates.filter((option) => option && option.endMarkerDetected)
+      )
+    : null;
 
-  if (hasSiteAdapter("newyorker") && preferredCount) {
+  if (newYorkerMarkerExtraction) {
+    chosen = {
+      ...newYorkerMarkerExtraction,
+      score: Math.max(primary.score, newYorkerMarkerExtraction.score || 0, 18)
+    };
+    decision = "newyorker-end-marker";
+  } else if (hasSiteAdapter("newyorker") && preferredCount) {
     chosen = {
       ...preferredCount,
       score: Math.max(primary.score, preferredCount.score || 28)
@@ -1266,15 +1295,10 @@ function chooseBestExtraction(primaryRoot, primaryScore, primarySelector = null)
       : "dominant-alternative";
   }
 
-  const progressCandidates = [chosen, primary, semantic, ancestor, legacy].filter(
-    isDomTrackableExtraction
-  );
-  let progressExtraction = progressCandidates[0] || null;
-  for (const option of progressCandidates) {
-    if (!progressExtraction || option.words > progressExtraction.words) {
-      progressExtraction = option;
-    }
-  }
+  const progressCandidates = hasSiteAdapter("newyorker")
+    ? [newYorkerMarkerExtraction, primary, semantic, ancestor].filter(isDomTrackableExtraction)
+    : [chosen, primary, semantic, ancestor, legacy].filter(isDomTrackableExtraction);
+  const progressExtraction = pickBestExtractionByWords(progressCandidates);
 
   return {
     extraction: chosen,
@@ -1392,6 +1416,76 @@ function trimNewYorkerBlockAtMarker(text) {
   };
 }
 
+function collectArticleBlockData(root) {
+  const blocks = [];
+  let endMarkerDetected = false;
+  const candidates = root.querySelectorAll(BLOCK_SELECTOR);
+  const newYorkerMarker = findNewYorkerEndMarker(root);
+
+  for (const node of candidates) {
+    if (!isProbablyVisible(node)) {
+      continue;
+    }
+    if (isInsideBoilerplate(node, root)) {
+      continue;
+    }
+    if (hasJunkLabel(node)) {
+      continue;
+    }
+
+    let text = normalizeText(node.textContent);
+    let shouldStopAfterBlock = false;
+    if (newYorkerMarker) {
+      if (node.contains(newYorkerMarker.node)) {
+        const trimmed = trimNewYorkerBlockAtMarker(node.textContent || "");
+        shouldStopAfterBlock = trimmed.stopAfter;
+        if (!trimmed.text) {
+          endMarkerDetected = true;
+          break;
+        }
+        text = trimmed.text;
+      } else if (newYorkerMarker.node.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) {
+        endMarkerDetected = true;
+        break;
+      }
+    }
+
+    if (!text) {
+      if (shouldStopAfterBlock) {
+        endMarkerDetected = true;
+        break;
+      }
+      continue;
+    }
+
+    const words = countWords(text);
+    if (words < 2) {
+      continue;
+    }
+
+    if (/^H[2-4]$/.test(node.tagName) && JUNK_HEADING.test(text)) {
+      continue;
+    }
+
+    if (looksLikeByline(text) && words < 15) {
+      continue;
+    }
+
+    const density = linkDensity(node);
+    if (density > 0.55 && words < 90) {
+      continue;
+    }
+
+    blocks.push({ node, text, words });
+    if (shouldStopAfterBlock) {
+      endMarkerDetected = true;
+      break;
+    }
+  }
+
+  return { blocks, endMarkerDetected };
+}
+
 function collectLegacyArticleText(root) {
   const blocks = [];
   let current = "";
@@ -1504,68 +1598,7 @@ function collectLegacyArticleText(root) {
 }
 
 function collectArticleBlocks(root) {
-  const blocks = [];
-  const candidates = root.querySelectorAll(BLOCK_SELECTOR);
-  const newYorkerMarker = findNewYorkerEndMarker(root);
-
-  for (const node of candidates) {
-    if (!isProbablyVisible(node)) {
-      continue;
-    }
-    if (isInsideBoilerplate(node, root)) {
-      continue;
-    }
-    if (hasJunkLabel(node)) {
-      continue;
-    }
-
-    let text = normalizeText(node.textContent);
-    let shouldStopAfterBlock = false;
-    if (newYorkerMarker) {
-      if (node.contains(newYorkerMarker.node)) {
-        const trimmed = trimNewYorkerBlockAtMarker(node.textContent || "");
-        shouldStopAfterBlock = trimmed.stopAfter;
-        if (!trimmed.text) {
-          break;
-        }
-        text = trimmed.text;
-      } else if (newYorkerMarker.node.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) {
-        break;
-      }
-    }
-
-    if (!text) {
-      if (shouldStopAfterBlock) {
-        break;
-      }
-      continue;
-    }
-
-    const words = countWords(text);
-    if (words < 2) {
-      continue;
-    }
-
-    if (/^H[2-4]$/.test(node.tagName) && JUNK_HEADING.test(text)) {
-      continue;
-    }
-
-    if (looksLikeByline(text) && words < 15) {
-      continue;
-    }
-
-    const density = linkDensity(node);
-    if (density > 0.55 && words < 90) {
-      continue;
-    }
-
-    blocks.push({ node, text, words });
-    if (shouldStopAfterBlock) {
-      break;
-    }
-  }
-
-  return blocks;
+  return collectArticleBlockData(root).blocks;
 }
 
 function collectArticleText(root) {
