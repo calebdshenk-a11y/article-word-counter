@@ -4,7 +4,9 @@ const MIN_READING_WPM = 100;
 const MAX_READING_WPM = 2000;
 const DEFAULT_READING_WPM = 500;
 const READING_SPEED_BY_TAB_KEY = "readerWpmByTab";
-const BADGE_BACKGROUND_COLOR = "#0b7a75";
+const BADGE_BACKGROUND_COLOR = "#c2410c";
+const BADGE_TEXT_COLOR = "#ffffff";
+const DEFAULT_ACTION_TITLE = "Article Word Counter";
 
 const progressByTabId = new Map();
 
@@ -39,9 +41,19 @@ async function setBadgeForTab(tabId, percent) {
     return;
   }
 
-  const text = Number.isFinite(percent) ? `${Math.max(0, Math.min(100, Math.round(percent)))}%` : "";
+  const roundedPercent = Number.isFinite(percent) ? Math.max(0, Math.min(100, Math.round(percent))) : null;
+  const text = Number.isFinite(roundedPercent) ? String(roundedPercent) : "";
   await chrome.action.setBadgeBackgroundColor({ tabId, color: BADGE_BACKGROUND_COLOR });
+  if (chrome.action && typeof chrome.action.setBadgeTextColor === "function") {
+    await chrome.action.setBadgeTextColor({ tabId, color: BADGE_TEXT_COLOR });
+  }
   await chrome.action.setBadgeText({ tabId, text });
+  await chrome.action.setTitle({
+    tabId,
+    title: Number.isFinite(roundedPercent)
+      ? `${roundedPercent}% done with this article`
+      : DEFAULT_ACTION_TITLE
+  });
 }
 
 async function clearProgressForTab(tabId) {
@@ -51,6 +63,7 @@ async function clearProgressForTab(tabId) {
 
   progressByTabId.delete(tabId);
   await chrome.action.setBadgeText({ tabId, text: "" });
+  await chrome.action.setTitle({ tabId, title: DEFAULT_ACTION_TITLE });
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -132,6 +145,17 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === "loading") {
     void clearProgressForTab(tabId);
   }
+});
+
+chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+  const progress = progressByTabId.get(tabId);
+  if (!progress) {
+    await chrome.action.setBadgeText({ tabId, text: "" });
+    await chrome.action.setTitle({ tabId, title: DEFAULT_ACTION_TITLE });
+    return;
+  }
+
+  await setBadgeForTab(tabId, progress.percent);
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
