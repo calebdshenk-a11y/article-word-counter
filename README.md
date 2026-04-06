@@ -34,6 +34,7 @@ The content script does not count the whole page. It:
    - extraction confidence
 4. Click **Refresh Count** after page updates.
 5. Click **Set Speed** to update reading speed for the current tab (new tabs default to `500 WPM`).
+6. Double-click a word in the article body to see an in-page tooltip with approximate article progress and time remaining at your current tab's reading speed.
 
 ## Troubleshooting
 

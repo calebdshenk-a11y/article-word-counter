@@ -6,7 +6,7 @@ const SKIM_READING_WPM = 650;
 const NORMAL_READING_WPM = 500;
 const DEEP_READING_WPM = 350;
 const DEFAULT_READING_WPM = NORMAL_READING_WPM;
-const CONTENT_SCRIPT_VERSION = 6;
+const CONTENT_SCRIPT_VERSION = 7;
 const DEBUG_MODE_KEY = "debugModeEnabled";
 const READING_SPEED_BY_TAB_KEY = "readerWpmByTab";
 
@@ -341,7 +341,8 @@ function showRoundedWordCount() {
 
 async function requestArticleAnalysis(tabId) {
   return chrome.tabs.sendMessage(tabId, {
-    type: "GET_ARTICLE_WORD_COUNT"
+    type: "GET_ARTICLE_WORD_COUNT",
+    forceRefresh: true
   });
 }
 
