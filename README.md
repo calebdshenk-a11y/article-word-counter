@@ -32,9 +32,11 @@ The content script does not count the whole page. It:
    - article word count (rounded to nearest hundred; hover for exact count)
    - estimated reading time (default: `500 WPM`, rounded to nearest minute)
    - extraction confidence
+   - selected-word progress details (percent done, time left, words remaining)
 4. Click **Refresh Count** after page updates.
 5. Click **Set Speed** to update reading speed for the current tab (new tabs default to `500 WPM`).
-6. Double-click a word in the article body to see an in-page tooltip with approximate article progress and time remaining at your current tab's reading speed.
+6. Double-click a single word in the article body to set the toolbar badge percentage for that tab.
+7. Open the extension popup to see the matching time-left and remaining-word details for the selected word.
 
 ## Troubleshooting
 

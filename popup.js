@@ -6,7 +6,7 @@ const SKIM_READING_WPM = 650;
 const NORMAL_READING_WPM = 500;
 const DEEP_READING_WPM = 350;
 const DEFAULT_READING_WPM = NORMAL_READING_WPM;
-const CONTENT_SCRIPT_VERSION = 7;
+const CONTENT_SCRIPT_VERSION = 8;
 const DEBUG_MODE_KEY = "debugModeEnabled";
 const READING_SPEED_BY_TAB_KEY = "readerWpmByTab";
 
@@ -14,6 +14,9 @@ const countEl = document.getElementById("count");
 const metaEl = document.getElementById("meta");
 const titleEl = document.getElementById("title");
 const readingTimeEl = document.getElementById("readingTime");
+const progressValueEl = document.getElementById("progressValue");
+const progressTimeEl = document.getElementById("progressTime");
+const progressMetaEl = document.getElementById("progressMeta");
 const speedChipEl = document.getElementById("speedChip");
 const confidenceEl = document.getElementById("confidence");
 const refreshButton = document.getElementById("refreshButton");
@@ -29,6 +32,7 @@ let currentWpm = DEFAULT_READING_WPM;
 let currentTabId = null;
 let debugModeEnabled = false;
 let lastResult = null;
+let lastTabProgress = null;
 let countHoverEnabled = false;
 
 function isPresetSpeed(wpm) {
@@ -143,6 +147,9 @@ function setBusyState() {
   countHoverEnabled = false;
   clearCountHoverDetails();
   metaEl.textContent = "Analyzing the current page...";
+  progressValueEl.textContent = "Checking progress";
+  progressTimeEl.textContent = "-- left";
+  progressMetaEl.textContent = "Looking for a selected word in the article.";
   renderDebug(lastResult, "Analyzing the current page...");
 }
 
@@ -154,6 +161,7 @@ function setErrorState(message) {
   readingTimeEl.textContent = "-- read";
   confidenceEl.textContent = "Confidence: --";
   lastResult = null;
+  renderSelectionProgress(null);
   renderDebug(null, `Error: ${message}`);
 }
 
@@ -254,6 +262,40 @@ function formatReadingTimeFromWords(words, wpm) {
   return `${minutes}m read`;
 }
 
+function formatRemainingTimeFromWords(words, wpm) {
+  if (!Number.isFinite(words) || words < 0 || !isValidWpm(wpm)) {
+    return "-- left";
+  }
+
+  if (words === 0) {
+    return "Done";
+  }
+
+  const minutes = Math.max(1, Math.round(words / wpm));
+  return `${minutes}m left`;
+}
+
+function renderSelectionProgress(progress) {
+  lastTabProgress = progress || null;
+
+  if (!progress) {
+    progressValueEl.textContent = "No word selected";
+    progressTimeEl.textContent = "-- left";
+    progressMetaEl.textContent = "Double-click a single word in the article to set progress.";
+    return;
+  }
+
+  progressValueEl.textContent = `${progress.percent}% done`;
+  progressTimeEl.textContent = formatRemainingTimeFromWords(progress.remainingWords, currentWpm);
+
+  if (progress.remainingWords <= 0) {
+    progressMetaEl.textContent = `${formatWordCount(progress.totalWords)} words total`;
+    return;
+  }
+
+  progressMetaEl.textContent = `${formatWordCount(progress.remainingWords)} words remaining`;
+}
+
 function setResultState(result) {
   lastResult = result;
   countHoverEnabled = true;
@@ -280,6 +322,9 @@ async function applyReadingSpeed(nextWpm, refreshAfterUpdate = false) {
 
   if (lastResult && lastResult.ok) {
     readingTimeEl.textContent = formatReadingTimeFromWords(lastResult.words, currentWpm);
+  }
+  if (lastTabProgress) {
+    renderSelectionProgress(lastTabProgress);
   }
 
   if (refreshAfterUpdate) {
@@ -346,6 +391,18 @@ async function requestArticleAnalysis(tabId) {
   });
 }
 
+async function requestTabProgress(tabId) {
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "GET_TAB_PROGRESS",
+      tabId
+    });
+    return response && response.ok ? response.progress || null : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
 async function pingContentScript(tabId) {
   try {
     const response = await chrome.tabs.sendMessage(tabId, {
@@ -388,6 +445,7 @@ async function fetchWordCount() {
   }
 
   try {
+    await wait(30);
     let response = await requestArticleAnalysis(activeTabId);
 
     if (shouldRetryAnalysis(response)) {
@@ -406,12 +464,18 @@ async function fetchWordCount() {
     if (!response || !response.ok) {
       const errorMessage = response && response.error ? response.error : "Unable to read this page.";
       setErrorState(errorMessage);
+      await wait(30);
+      renderSelectionProgress(await requestTabProgress(activeTabId));
       return;
     }
 
     setResultState(response);
+    await wait(30);
+    renderSelectionProgress(await requestTabProgress(activeTabId));
   } catch (_error) {
     setErrorState("This page is restricted or not readable by the extension.");
+    await wait(30);
+    renderSelectionProgress(await requestTabProgress(activeTabId));
   }
 }
 
@@ -430,6 +494,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   debugModeEnabled = await loadDebugMode();
   setSpeedUi(currentWpm);
   setDebugUi();
+  renderSelectionProgress(null);
   renderDebug(null);
   await fetchWordCount();
 });

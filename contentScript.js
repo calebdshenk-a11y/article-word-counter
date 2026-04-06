@@ -2,14 +2,8 @@
 
 (() => {
 
-var CONTENT_SCRIPT_VERSION = 7;
-var DEFAULT_READING_WPM = 500;
-var MIN_READING_WPM = 100;
-var MAX_READING_WPM = 2000;
-var MAX_PROGRESS_SELECTION_WORDS = 8;
-var PROGRESS_TOOLTIP_GAP_PX = 14;
-var PROGRESS_TOOLTIP_HIDE_DELAY_MS = 5000;
-var numberFormatter = new Intl.NumberFormat();
+var CONTENT_SCRIPT_VERSION = 8;
+var REQUIRED_SELECTION_WORDS = 1;
 
 var JUNK_KEYWORDS =
   /\b(ad|ads|advert|promo|sponsor|newsletter|subscribe|header|footer|nav|menu|sidebar|related|recommend|popular|trending|cookie|consent|comment|share|social|banner|breadcrumb|outbrain|taboola|paywall)\b/i;
@@ -116,13 +110,6 @@ var SITE_ADAPTERS = [
     metadataSelectorHint: INLINE_SCRIPT_SELECTOR
   }
 ];
-
-function formatWordCount(value) {
-  if (!Number.isFinite(value)) {
-    return "--";
-  }
-  return numberFormatter.format(Math.max(0, Math.round(value)));
-}
 
 function normalizeText(text) {
   return (text || "").replace(/\s+/g, " ").trim();
@@ -687,6 +674,51 @@ function extractWsjWordCountHint() {
 }
 
 function extractNewYorkerWordCountHint() {
+  try {
+    const pageContext = globalThis.window && window.cns && window.cns.pageContext;
+    const slug = window.location.pathname.split("/").filter(Boolean).pop() || "";
+    const contextSlug =
+      pageContext && typeof pageContext.slug === "string" ? pageContext.slug : "";
+    const hintedCopyCount =
+      pageContext && pageContext.content ? parseCountValue(pageContext.content.copyCount) : null;
+
+    if (hintedCopyCount && (!slug || !contextSlug || slug === contextSlug)) {
+      return hintedCopyCount;
+    }
+  } catch (_error) {
+    // Fall back to scanning inline scripts below.
+  }
+
+  try {
+    const dataLayer = globalThis.window && Array.isArray(window.dataLayer) ? window.dataLayer : [];
+    const path = window.location.pathname;
+
+    for (const entry of dataLayer) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+
+      const content = entry.content && typeof entry.content === "object" ? entry.content : null;
+      const canonical =
+        entry.page && typeof entry.page === "object" && typeof entry.page.canonical === "string"
+          ? entry.page.canonical
+          : "";
+      const hinted = content ? parseCountValue(content.wordCount) : null;
+
+      if (
+        hinted &&
+        ((!path && !canonical) ||
+          !canonical ||
+          canonical.includes(path) ||
+          content.contentType === "article")
+      ) {
+        return hinted;
+      }
+    }
+  } catch (_error) {
+    // Fall back to scanning inline scripts below.
+  }
+
   const scripts = document.querySelectorAll(INLINE_SCRIPT_SELECTOR);
   const slug = window.location.pathname.split("/").filter(Boolean).pop() || "";
 
@@ -1360,10 +1392,6 @@ function confidenceLevel(wordCount, blockCount, rawScore) {
   return "Low";
 }
 
-function isValidWpm(value) {
-  return Number.isFinite(value) && value >= MIN_READING_WPM && value <= MAX_READING_WPM;
-}
-
 function buildSerializableAnalysis(analysis) {
   const extraction = analysis.extraction;
   return {
@@ -1384,26 +1412,73 @@ function buildSerializableAnalysis(analysis) {
 
 var cachedPageAnalysis = null;
 
+function buildFallbackDebug(extraction, error) {
+  return {
+    decision: extraction && extraction.source === "metadata" ? "fallback-metadata" : "fallback-jsonld",
+    chosen: summarizeExtractionForDebug(extraction),
+    primary: null,
+    topAlternatives: error ? [{ source: "error", rootTag: "fallback", rootSelector: error }] : []
+  };
+}
+
+function buildFallbackAnalysis(error) {
+  const metadata = buildPublisherHintExtraction(0);
+  const jsonLd = buildJsonLdExtraction();
+  const extraction = metadata || jsonLd;
+
+  if (!extraction) {
+    return null;
+  }
+
+  const message =
+    error instanceof Error && error.message
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : "Unknown analysis error";
+
+  return {
+    pageTitle: document.title || "",
+    url: window.location.href,
+    extraction,
+    progressExtraction: null,
+    debug: buildFallbackDebug(extraction, message),
+    generatedAt: new Date().toISOString()
+  };
+}
+
 function getPageAnalysis(forceRefresh) {
   if (!forceRefresh && cachedPageAnalysis && cachedPageAnalysis.url === window.location.href) {
     return cachedPageAnalysis;
   }
 
-  const { node: primaryRoot, score: primaryScore, selector: primarySelector } = pickMainContentRoot();
-  const { extraction, progressExtraction, debug } = chooseBestExtraction(
-    primaryRoot,
-    primaryScore,
-    primarySelector
-  );
+  try {
+    const {
+      node: primaryRoot,
+      score: primaryScore,
+      selector: primarySelector
+    } = pickMainContentRoot();
+    const { extraction, progressExtraction, debug } = chooseBestExtraction(
+      primaryRoot,
+      primaryScore,
+      primarySelector
+    );
 
-  cachedPageAnalysis = {
-    pageTitle: document.title || "",
-    url: window.location.href,
-    extraction,
-    progressExtraction,
-    debug,
-    generatedAt: new Date().toISOString()
-  };
+    cachedPageAnalysis = {
+      pageTitle: document.title || "",
+      url: window.location.href,
+      extraction,
+      progressExtraction,
+      debug,
+      generatedAt: new Date().toISOString()
+    };
+  } catch (error) {
+    const fallback = buildFallbackAnalysis(error);
+    if (!fallback) {
+      throw error;
+    }
+    cachedPageAnalysis = fallback;
+  }
 
   return cachedPageAnalysis;
 }
@@ -1412,22 +1487,39 @@ function analyzePage(forceRefresh) {
   return buildSerializableAnalysis(getPageAnalysis(Boolean(forceRefresh)));
 }
 
-function nodeToElement(node) {
+function getProgressExtraction(analysis) {
+  if (!analysis) {
+    return null;
+  }
+
+  if (isDomTrackableExtraction(analysis.progressExtraction)) {
+    return analysis.progressExtraction;
+  }
+  if (isDomTrackableExtraction(analysis.extraction)) {
+    return analysis.extraction;
+  }
+  return null;
+}
+
+function getElementForNode(node) {
   if (node instanceof Element) {
     return node;
   }
-  return node && node.parentElement instanceof Element ? node.parentElement : null;
+
+  if (node && node.parentElement instanceof Element) {
+    return node.parentElement;
+  }
+
+  return null;
 }
 
 function isEditableTarget(node) {
-  const element = nodeToElement(node);
-  if (!element) {
-    return false;
-  }
+  const element = getElementForNode(node);
   return Boolean(
-    element.closest(
-      "input, textarea, select, [contenteditable=''], [contenteditable='true'], [role='textbox']"
-    )
+    element &&
+      element.closest(
+        "input, textarea, select, [contenteditable=''], [contenteditable='true'], [role='textbox']"
+      )
   );
 }
 
@@ -1515,16 +1607,17 @@ function getSelectionProgress(forceRefresh) {
 
   const selectionText = normalizeText(range.toString());
   const selectedWords = countWords(selectionText);
-  if (selectedWords === 0 || selectedWords > MAX_PROGRESS_SELECTION_WORDS) {
+  if (selectedWords !== REQUIRED_SELECTION_WORDS) {
     return null;
   }
 
   const analysis = getPageAnalysis(Boolean(forceRefresh));
-  const progressExtraction = analysis.progressExtraction || analysis.extraction;
+  const progressExtraction = getProgressExtraction(analysis);
 
   if (
-    !isDomTrackableExtraction(progressExtraction) ||
+    !progressExtraction ||
     !(progressExtraction.root instanceof Element) ||
+    !progressExtraction.root.contains(range.startContainer) ||
     !progressExtraction.root.contains(range.endContainer)
   ) {
     return null;
@@ -1544,222 +1637,83 @@ function getSelectionProgress(forceRefresh) {
   const remainingWords = Math.max(0, totalWords - wordsRead);
 
   return {
-    range,
-    ratio,
+    percent: Math.max(0, Math.min(100, Math.round(ratio * 100))),
     totalWords,
     wordsRead,
     remainingWords
   };
 }
 
-async function getCurrentReadingSpeed() {
+function sendRuntimeMessage(message) {
   try {
-    const response = await chrome.runtime.sendMessage({
-      type: "GET_READING_SPEED_FOR_TAB"
-    });
-    const wpm = Number(response && response.wpm);
-    if (isValidWpm(wpm)) {
-      return Math.round(wpm);
-    }
+    return chrome.runtime.sendMessage(message);
   } catch (_error) {
-    // Fall back to the default speed if the background worker is unavailable.
+    return Promise.resolve(null);
   }
-
-  return DEFAULT_READING_WPM;
 }
 
-var progressTooltipHost = null;
-var progressTooltipPrimaryEl = null;
-var progressTooltipSecondaryEl = null;
-var progressTooltipTertiaryEl = null;
-var progressTooltipHideTimer = 0;
-var progressTooltipRequestId = 0;
+async function clearTabProgress() {
+  await sendRuntimeMessage({ type: "CLEAR_TAB_PROGRESS" });
+}
 
-function ensureProgressTooltip() {
-  if (progressTooltipHost) {
-    return progressTooltipHost;
-  }
+async function setTabProgress(progress) {
+  await sendRuntimeMessage({
+    type: "SET_TAB_PROGRESS",
+    progress: {
+      percent: progress.percent,
+      totalWords: progress.totalWords,
+      wordsRead: progress.wordsRead,
+      remainingWords: progress.remainingWords,
+      updatedAt: new Date().toISOString()
+    }
+  });
+}
 
-  progressTooltipHost = document.createElement("div");
-  progressTooltipHost.setAttribute("data-article-word-counter-progress", "true");
-  progressTooltipHost.style.position = "fixed";
-  progressTooltipHost.style.left = "0";
-  progressTooltipHost.style.top = "0";
-  progressTooltipHost.style.zIndex = "2147483647";
-  progressTooltipHost.style.pointerEvents = "none";
-  progressTooltipHost.hidden = true;
-
-  const shadowRoot = progressTooltipHost.attachShadow({ mode: "open" });
-  const style = document.createElement("style");
-  style.textContent = `
-    .tooltip {
-      display: grid;
-      gap: 4px;
-      max-width: 240px;
-      padding: 12px 14px;
-      border: 1px solid rgba(148, 163, 184, 0.28);
-      border-radius: 12px;
-      background: rgba(15, 23, 42, 0.96);
-      color: #f8fafc;
-      box-shadow: 0 18px 42px rgba(15, 23, 42, 0.28);
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      line-height: 1.35;
-      letter-spacing: 0.01em;
+async function updateSelectionProgress(forceRefresh) {
+  try {
+    const progress = getSelectionProgress(forceRefresh);
+    if (!progress) {
+      await clearTabProgress();
+      return;
     }
 
-    .primary {
-      font-size: 14px;
-      font-weight: 700;
-    }
-
-    .secondary,
-    .tertiary {
-      font-size: 12px;
-      color: #cbd5e1;
-    }
-  `;
-
-  const tooltip = document.createElement("div");
-  tooltip.className = "tooltip";
-
-  progressTooltipPrimaryEl = document.createElement("div");
-  progressTooltipPrimaryEl.className = "primary";
-
-  progressTooltipSecondaryEl = document.createElement("div");
-  progressTooltipSecondaryEl.className = "secondary";
-
-  progressTooltipTertiaryEl = document.createElement("div");
-  progressTooltipTertiaryEl.className = "tertiary";
-
-  tooltip.append(progressTooltipPrimaryEl, progressTooltipSecondaryEl, progressTooltipTertiaryEl);
-  shadowRoot.append(style, tooltip);
-  document.documentElement.appendChild(progressTooltipHost);
-
-  return progressTooltipHost;
-}
-
-function clearProgressTooltipHideTimer() {
-  if (progressTooltipHideTimer) {
-    window.clearTimeout(progressTooltipHideTimer);
-    progressTooltipHideTimer = 0;
+    await setTabProgress(progress);
+  } catch (_error) {
+    await clearTabProgress();
   }
 }
 
-function hideProgressTooltip() {
-  clearProgressTooltipHideTimer();
-  progressTooltipRequestId += 1;
-  if (progressTooltipHost) {
-    progressTooltipHost.hidden = true;
+var selectionProgressTimer = 0;
+var selectionProgressNeedsRefresh = false;
+
+function clearSelectionProgressTimer() {
+  if (selectionProgressTimer) {
+    window.clearTimeout(selectionProgressTimer);
+    selectionProgressTimer = 0;
   }
 }
 
-function scheduleProgressTooltipHide() {
-  clearProgressTooltipHideTimer();
-  progressTooltipHideTimer = window.setTimeout(() => {
-    hideProgressTooltip();
-  }, PROGRESS_TOOLTIP_HIDE_DELAY_MS);
-}
-
-function resolveProgressTooltipAnchor(range, event) {
-  const rect = range.getBoundingClientRect();
-  const x =
-    event && Number.isFinite(event.clientX) ? event.clientX : rect.left + rect.width / 2;
-  const y = event && Number.isFinite(event.clientY) ? event.clientY : rect.top;
-
-  return {
-    x: Number.isFinite(x) ? x : window.innerWidth / 2,
-    y: Number.isFinite(y) ? y : window.innerHeight / 2
-  };
-}
-
-function positionProgressTooltip(anchor) {
-  if (!progressTooltipHost) {
-    return;
-  }
-
-  const margin = 12;
-  const rect = progressTooltipHost.getBoundingClientRect();
-  let left = anchor.x + PROGRESS_TOOLTIP_GAP_PX;
-  let top = anchor.y + PROGRESS_TOOLTIP_GAP_PX;
-
-  if (left + rect.width > window.innerWidth - margin) {
-    left = Math.max(margin, anchor.x - rect.width - PROGRESS_TOOLTIP_GAP_PX);
-  }
-  if (top + rect.height > window.innerHeight - margin) {
-    top = Math.max(margin, anchor.y - rect.height - PROGRESS_TOOLTIP_GAP_PX);
-  }
-
-  progressTooltipHost.style.left = `${Math.round(left)}px`;
-  progressTooltipHost.style.top = `${Math.round(top)}px`;
-}
-
-function showProgressTooltip(progress, wpm, event) {
-  const tooltip = ensureProgressTooltip();
-  const percentDone = Math.max(0, Math.min(100, Math.round(progress.ratio * 100)));
-  const remainingMinutes =
-    progress.remainingWords <= 0 ? 0 : Math.max(1, Math.round(progress.remainingWords / wpm));
-
-  progressTooltipPrimaryEl.textContent = `${percentDone}% done`;
-  if (progress.remainingWords <= 0) {
-    progressTooltipSecondaryEl.textContent = "You are at the end of the article.";
-    progressTooltipTertiaryEl.textContent = `${formatWordCount(progress.totalWords)} words total`;
-  } else {
-    progressTooltipSecondaryEl.textContent = `About ${remainingMinutes}m left at ${formatWordCount(wpm)} wpm`;
-    progressTooltipTertiaryEl.textContent = `${formatWordCount(progress.remainingWords)} words remaining`;
-  }
-
-  tooltip.hidden = false;
-  positionProgressTooltip(resolveProgressTooltipAnchor(progress.range, event));
-  scheduleProgressTooltipHide();
-}
-
-async function maybeShowSelectionProgress(event) {
-  const progress = getSelectionProgress(false);
-  if (!progress) {
-    hideProgressTooltip();
-    return;
-  }
-
-  const requestId = progressTooltipRequestId + 1;
-  progressTooltipRequestId = requestId;
-  const wpm = await getCurrentReadingSpeed();
-  if (requestId !== progressTooltipRequestId) {
-    return;
-  }
-
-  showProgressTooltip(progress, wpm, event);
+function scheduleSelectionProgressUpdate(forceRefresh) {
+  selectionProgressNeedsRefresh = selectionProgressNeedsRefresh || Boolean(forceRefresh);
+  clearSelectionProgressTimer();
+  selectionProgressTimer = window.setTimeout(() => {
+    const shouldRefresh = selectionProgressNeedsRefresh;
+    selectionProgressNeedsRefresh = false;
+    selectionProgressTimer = 0;
+    void updateSelectionProgress(shouldRefresh);
+  }, 0);
 }
 
 function onDocumentDoubleClick(event) {
   if (isEditableTarget(event.target)) {
-    hideProgressTooltip();
+    void clearTabProgress();
     return;
   }
-
-  window.setTimeout(() => {
-    maybeShowSelectionProgress(event);
-  }, 0);
+  scheduleSelectionProgressUpdate(false);
 }
 
 function onSelectionChange() {
-  const selection = window.getSelection();
-  if (!selection || selection.isCollapsed) {
-    hideProgressTooltip();
-  }
-}
-
-function onPointerDown() {
-  hideProgressTooltip();
-}
-
-function onKeyDown(event) {
-  if (event.key === "Escape") {
-    hideProgressTooltip();
-  }
-}
-
-function onViewportChange() {
-  hideProgressTooltip();
+  scheduleSelectionProgressUpdate(false);
 }
 
 var onMessage = (message, _sender, sendResponse) => {
@@ -1777,7 +1731,9 @@ var onMessage = (message, _sender, sendResponse) => {
   }
 
   try {
-    sendResponse(analyzePage(Boolean(message.forceRefresh)));
+    const forceRefresh = Boolean(message.forceRefresh);
+    sendResponse(analyzePage(forceRefresh));
+    scheduleSelectionProgressUpdate(forceRefresh);
   } catch (error) {
     sendResponse({
       ok: false,
@@ -1795,27 +1751,13 @@ if (typeof previousCleanup === "function") {
 chrome.runtime.onMessage.addListener(onMessage);
 document.addEventListener("dblclick", onDocumentDoubleClick, true);
 document.addEventListener("selectionchange", onSelectionChange);
-document.addEventListener("pointerdown", onPointerDown, true);
-document.addEventListener("keydown", onKeyDown, true);
-window.addEventListener("scroll", onViewportChange, true);
-window.addEventListener("resize", onViewportChange);
+scheduleSelectionProgressUpdate(false);
 
 globalThis[CLEANUP_KEY] = function cleanupArticleWordCounter() {
   chrome.runtime.onMessage.removeListener(onMessage);
   document.removeEventListener("dblclick", onDocumentDoubleClick, true);
   document.removeEventListener("selectionchange", onSelectionChange);
-  document.removeEventListener("pointerdown", onPointerDown, true);
-  document.removeEventListener("keydown", onKeyDown, true);
-  window.removeEventListener("scroll", onViewportChange, true);
-  window.removeEventListener("resize", onViewportChange);
-  hideProgressTooltip();
-  if (progressTooltipHost && progressTooltipHost.parentNode) {
-    progressTooltipHost.parentNode.removeChild(progressTooltipHost);
-  }
-  progressTooltipHost = null;
-  progressTooltipPrimaryEl = null;
-  progressTooltipSecondaryEl = null;
-  progressTooltipTertiaryEl = null;
+  clearSelectionProgressTimer();
   cachedPageAnalysis = null;
 };
 })();
