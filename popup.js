@@ -2,14 +2,38 @@
 
 const MIN_READING_WPM = 100;
 const MAX_READING_WPM = 2000;
-const SKIM_READING_WPM = 650;
-const NORMAL_READING_WPM = 500;
-const DEEP_READING_WPM = 350;
-const DEFAULT_READING_WPM = NORMAL_READING_WPM;
+const DEFAULT_READER_PRESETS = Object.freeze({
+  skim: 325,
+  normal: 250,
+  deep: 200
+});
+const PRESET_ORDER = ["skim", "normal", "deep"];
+const PRESET_META = Object.freeze({
+  skim: { label: "Skim" },
+  normal: { label: "Normal" },
+  deep: { label: "Deep" }
+});
+const DEFAULT_READING_MODE = "normal";
 const CONTENT_SCRIPT_VERSION = 17;
 const DEBUG_MODE_KEY = "debugModeEnabled";
-const READING_SPEED_BY_TAB_KEY = "readerWpmByTab";
+const READER_PRESETS_KEY = "readerPresets";
+const READER_PRESETS_CONFIRMED_KEY = "readerPresetsConfirmed";
+const LEGACY_READING_SPEED_BY_TAB_KEY = "readerWpmByTab";
 
+const presetEditorPanelEl = document.getElementById("presetEditorPanel");
+const presetEditorEyebrowEl = document.getElementById("presetEditorEyebrow");
+const presetEditorTitleEl = document.getElementById("presetEditorTitle");
+const presetEditorDescriptionEl = document.getElementById("presetEditorDescription");
+const presetFormEl = document.getElementById("presetForm");
+const presetSaveButton = document.getElementById("presetSaveButton");
+const presetCancelButton = document.getElementById("presetCancelButton");
+const presetFormErrorEl = document.getElementById("presetFormError");
+const presetInputEls = {
+  skim: document.getElementById("presetSkimInput"),
+  normal: document.getElementById("presetNormalInput"),
+  deep: document.getElementById("presetDeepInput")
+};
+const appShellEl = document.getElementById("appShell");
 const countEl = document.getElementById("count");
 const metaEl = document.getElementById("meta");
 const titleEl = document.getElementById("title");
@@ -20,7 +44,7 @@ const progressMetaEl = document.getElementById("progressMeta");
 const speedChipEl = document.getElementById("speedChip");
 const confidenceEl = document.getElementById("confidence");
 const refreshButton = document.getElementById("refreshButton");
-const speedButton = document.getElementById("speedButton");
+const presetButton = document.getElementById("presetButton");
 const presetButtons = Array.from(document.querySelectorAll(".presetChip"));
 const debugToggleButton = document.getElementById("debugToggleButton");
 const debugPanelEl = document.getElementById("debugPanel");
@@ -28,15 +52,51 @@ const debugDetailsEl = document.getElementById("debugDetails");
 
 const numberFormatter = new Intl.NumberFormat();
 
-let currentWpm = DEFAULT_READING_WPM;
+let readerPresets = cloneDefaultPresets();
+let currentMode = DEFAULT_READING_MODE;
+let currentWpm = DEFAULT_READER_PRESETS[DEFAULT_READING_MODE];
 let currentTabId = null;
 let debugModeEnabled = false;
+let presetEditorMode = "setup";
 let lastResult = null;
 let lastTabProgress = null;
 let countHoverEnabled = false;
 
-function isPresetSpeed(wpm) {
-  return wpm === SKIM_READING_WPM || wpm === NORMAL_READING_WPM || wpm === DEEP_READING_WPM;
+function cloneDefaultPresets() {
+  return { ...DEFAULT_READER_PRESETS };
+}
+
+function getPresetLabel(mode) {
+  return PRESET_META[mode] ? PRESET_META[mode].label : "Preset";
+}
+
+function isValidWpm(value) {
+  return Number.isFinite(value) && value >= MIN_READING_WPM && value <= MAX_READING_WPM;
+}
+
+function hasValidPresetMap(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  return PRESET_ORDER.every((mode) => isValidWpm(Number(value[mode])));
+}
+
+function normalizeReaderPresets(value) {
+  const normalized = cloneDefaultPresets();
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return normalized;
+  }
+
+  for (const mode of PRESET_ORDER) {
+    const parsed = Number(value[mode]);
+    if (isValidWpm(parsed)) {
+      normalized[mode] = Math.round(parsed);
+    }
+  }
+
+  return normalized;
 }
 
 function formatWordCount(value) {
@@ -145,6 +205,113 @@ function renderDebug(result, statusMessage = "") {
   debugDetailsEl.textContent = lines.join("\n");
 }
 
+function resetPresetInputValidity() {
+  for (const mode of PRESET_ORDER) {
+    presetInputEls[mode].setAttribute("aria-invalid", "false");
+  }
+}
+
+function populatePresetForm(presets) {
+  resetPresetInputValidity();
+  presetFormErrorEl.hidden = true;
+  presetFormErrorEl.textContent = "";
+
+  for (const mode of PRESET_ORDER) {
+    presetInputEls[mode].value = String(presets[mode]);
+  }
+}
+
+function showPresetFormError(message, invalidMode = "") {
+  presetFormErrorEl.textContent = message;
+  presetFormErrorEl.hidden = false;
+
+  if (!invalidMode || !presetInputEls[invalidMode]) {
+    return;
+  }
+
+  presetInputEls[invalidMode].setAttribute("aria-invalid", "true");
+  presetInputEls[invalidMode].focus();
+  presetInputEls[invalidMode].select();
+}
+
+function configurePresetEditor(mode) {
+  presetEditorMode = mode;
+  populatePresetForm(readerPresets);
+
+  if (mode === "setup") {
+    presetEditorEyebrowEl.textContent = "Reading Presets";
+    presetEditorTitleEl.textContent = "Set your reading pace";
+    presetEditorDescriptionEl.textContent =
+      "Confirm or customize your skim, normal, and deep speeds. You will only see this setup once.";
+    presetSaveButton.textContent = "Confirm Presets";
+    presetCancelButton.hidden = true;
+    return;
+  }
+
+  presetEditorEyebrowEl.textContent = "Set Presets";
+  presetEditorTitleEl.textContent = "Update your reading presets";
+  presetEditorDescriptionEl.textContent =
+    "These values power your Skim, Normal, and Deep buttons everywhere in the extension.";
+  presetSaveButton.textContent = "Save Presets";
+  presetCancelButton.hidden = false;
+}
+
+function openPresetEditor(mode) {
+  configurePresetEditor(mode);
+  appShellEl.hidden = true;
+  presetEditorPanelEl.hidden = false;
+}
+
+function closePresetEditor() {
+  presetEditorPanelEl.hidden = true;
+  appShellEl.hidden = false;
+  presetFormErrorEl.hidden = true;
+  presetFormErrorEl.textContent = "";
+  resetPresetInputValidity();
+}
+
+function setPresetUi() {
+  for (const button of presetButtons) {
+    const mode = button.dataset.mode;
+    const selected = mode === currentMode;
+    const presetValue = readerPresets[mode];
+    const valueEl = button.querySelector(".presetChipValue");
+
+    button.setAttribute("aria-pressed", String(selected));
+    button.setAttribute("aria-label", `${getPresetLabel(mode)}, ${presetValue} words per minute`);
+    button.title = `${getPresetLabel(mode)}: ${presetValue} wpm`;
+
+    if (valueEl) {
+      valueEl.textContent = String(presetValue);
+    }
+  }
+}
+
+function setSpeedUi() {
+  currentWpm = readerPresets[currentMode] || readerPresets[DEFAULT_READING_MODE];
+  speedChipEl.textContent = `${getPresetLabel(currentMode)} · ${currentWpm} wpm`;
+  setPresetUi();
+}
+
+function refreshDerivedTimes() {
+  setSpeedUi();
+
+  if (lastResult && lastResult.ok) {
+    readingTimeEl.textContent = formatReadingTimeFromWords(lastResult.words, currentWpm);
+  } else {
+    readingTimeEl.textContent = "-- read";
+  }
+
+  if (lastTabProgress) {
+    renderSelectionProgress(lastTabProgress);
+  }
+}
+
+function setCurrentMode(nextMode) {
+  currentMode = PRESET_ORDER.includes(nextMode) ? nextMode : DEFAULT_READING_MODE;
+  refreshDerivedTimes();
+}
+
 function setBusyState() {
   countEl.textContent = "...";
   countHoverEnabled = false;
@@ -169,23 +336,6 @@ function setErrorState(message) {
   renderDebug(null, `Error: ${message}`);
 }
 
-function isValidWpm(value) {
-  return Number.isFinite(value) && value >= MIN_READING_WPM && value <= MAX_READING_WPM;
-}
-
-function setPresetUi(wpm) {
-  for (const button of presetButtons) {
-    const presetValue = Number(button.dataset.presetWpm);
-    const selected = Number.isFinite(presetValue) && presetValue === wpm;
-    button.setAttribute("aria-pressed", String(selected));
-  }
-}
-
-function setSpeedUi(wpm) {
-  speedChipEl.textContent = `${wpm} wpm`;
-  setPresetUi(wpm);
-}
-
 async function resolveActiveTab() {
   try {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -202,44 +352,39 @@ function isInjectableTabUrl(url) {
   return typeof url === "string" && /^https?:\/\//i.test(url);
 }
 
-function toSpeedByTabMap(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
+async function loadReaderPreferences() {
+  try {
+    const stored = await chrome.storage.local.get([
+      READER_PRESETS_KEY,
+      READER_PRESETS_CONFIRMED_KEY
+    ]);
+    const presets = normalizeReaderPresets(stored[READER_PRESETS_KEY]);
+    const confirmed =
+      Boolean(stored[READER_PRESETS_CONFIRMED_KEY]) &&
+      hasValidPresetMap(stored[READER_PRESETS_KEY]);
+
+    return { presets, confirmed };
+  } catch (_error) {
+    return {
+      presets: cloneDefaultPresets(),
+      confirmed: false
+    };
   }
-  return value;
 }
 
-async function loadReadingSpeed(tabId) {
-  if (typeof tabId !== "number") {
-    return DEFAULT_READING_WPM;
-  }
+async function saveReaderPreferences(nextPresets) {
+  const normalized = normalizeReaderPresets(nextPresets);
 
   try {
-    const stored = await chrome.storage.local.get(READING_SPEED_BY_TAB_KEY);
-    const speedByTab = toSpeedByTabMap(stored[READING_SPEED_BY_TAB_KEY]);
-    const parsed = Number(speedByTab[String(tabId)]);
-    if (isValidWpm(parsed)) {
-      return Math.round(parsed);
-    }
+    await chrome.storage.local.set({
+      [READER_PRESETS_KEY]: normalized,
+      [READER_PRESETS_CONFIRMED_KEY]: true
+    });
+    await chrome.storage.local.remove(LEGACY_READING_SPEED_BY_TAB_KEY);
+    readerPresets = normalized;
+    return true;
   } catch (_error) {
-    return DEFAULT_READING_WPM;
-  }
-
-  return DEFAULT_READING_WPM;
-}
-
-async function saveReadingSpeed(wpm) {
-  if (typeof currentTabId !== "number") {
-    return;
-  }
-
-  try {
-    const stored = await chrome.storage.local.get(READING_SPEED_BY_TAB_KEY);
-    const speedByTab = toSpeedByTabMap(stored[READING_SPEED_BY_TAB_KEY]);
-    speedByTab[String(currentTabId)] = wpm;
-    await chrome.storage.local.set({ [READING_SPEED_BY_TAB_KEY]: speedByTab });
-  } catch (_error) {
-    metaEl.textContent = "Could not save your reading speed.";
+    return false;
   }
 }
 
@@ -326,48 +471,81 @@ function setResultState(result) {
   renderDebug(result);
 }
 
-async function applyReadingSpeed(nextWpm, refreshAfterUpdate = false) {
-  currentWpm = Math.round(nextWpm);
-  setSpeedUi(currentWpm);
-  await saveReadingSpeed(currentWpm);
+function parsePresetForm() {
+  resetPresetInputValidity();
+  presetFormErrorEl.hidden = true;
+  presetFormErrorEl.textContent = "";
 
-  if (lastResult && lastResult.ok) {
-    readingTimeEl.textContent = formatReadingTimeFromWords(lastResult.words, currentWpm);
-  }
-  if (lastTabProgress) {
-    renderSelectionProgress(lastTabProgress);
+  const nextPresets = {};
+
+  for (const mode of PRESET_ORDER) {
+    const raw = presetInputEls[mode].value.trim();
+    const parsed = Number(raw);
+
+    if (!raw || !isValidWpm(parsed)) {
+      return {
+        ok: false,
+        invalidMode: mode,
+        message: `Enter a valid ${getPresetLabel(mode).toLowerCase()} speed from ${MIN_READING_WPM} to ${MAX_READING_WPM} WPM.`
+      };
+    }
+
+    nextPresets[mode] = Math.round(parsed);
   }
 
-  if (refreshAfterUpdate) {
+  return {
+    ok: true,
+    presets: nextPresets
+  };
+}
+
+async function handlePresetSubmit(event) {
+  event.preventDefault();
+
+  const parsed = parsePresetForm();
+  if (!parsed.ok) {
+    showPresetFormError(parsed.message, parsed.invalidMode);
+    return;
+  }
+
+  const previousMode = currentMode;
+  const saved = await saveReaderPreferences(parsed.presets);
+  if (!saved) {
+    showPresetFormError("Could not save your presets. Try again.");
+    return;
+  }
+
+  currentMode = presetEditorMode === "setup" ? DEFAULT_READING_MODE : previousMode;
+  refreshDerivedTimes();
+  closePresetEditor();
+
+  if (presetEditorMode === "setup") {
     await fetchWordCount();
   }
 }
 
-async function promptForReadingSpeed() {
-  const promptText = `Set your reading speed in WPM (${MIN_READING_WPM}-${MAX_READING_WPM}).`;
-  const value = window.prompt(promptText, String(currentWpm));
-  if (value === null) {
+function handlePresetCancel() {
+  if (presetEditorMode !== "edit") {
     return;
   }
 
-  const parsed = Number(value.trim());
-  if (!isValidWpm(parsed)) {
-    metaEl.textContent = `Enter a valid reading speed from ${MIN_READING_WPM} to ${MAX_READING_WPM} WPM.`;
-    return;
-  }
-
-  await applyReadingSpeed(parsed, true);
+  closePresetEditor();
 }
 
-async function applyPresetReadingSpeed(event) {
-  const target = event.currentTarget;
-  const parsed = Number(target && target.dataset ? target.dataset.presetWpm : NaN);
+function openPresetManager() {
+  openPresetEditor("edit");
+}
 
-  if (!isValidWpm(parsed) || !isPresetSpeed(parsed)) {
+function applyPresetReadingMode(event) {
+  const mode = event.currentTarget && event.currentTarget.dataset
+    ? event.currentTarget.dataset.mode
+    : "";
+
+  if (!PRESET_ORDER.includes(mode)) {
     return;
   }
 
-  await applyReadingSpeed(parsed, false);
+  setCurrentMode(mode);
 }
 
 async function toggleDebugMode() {
@@ -565,9 +743,11 @@ async function fetchWordCount() {
 }
 
 refreshButton.addEventListener("click", fetchWordCount);
-speedButton.addEventListener("click", promptForReadingSpeed);
+presetButton.addEventListener("click", openPresetManager);
+presetFormEl.addEventListener("submit", handlePresetSubmit);
+presetCancelButton.addEventListener("click", handlePresetCancel);
 for (const button of presetButtons) {
-  button.addEventListener("click", applyPresetReadingSpeed);
+  button.addEventListener("click", applyPresetReadingMode);
 }
 debugToggleButton.addEventListener("click", toggleDebugMode);
 countEl.addEventListener("mouseenter", showExactWordCount);
@@ -576,11 +756,21 @@ countEl.addEventListener("mouseleave", showRoundedWordCount);
 document.addEventListener("DOMContentLoaded", async () => {
   const activeTab = await resolveActiveTab();
   currentTabId = activeTab && typeof activeTab.id === "number" ? activeTab.id : null;
-  currentWpm = await loadReadingSpeed(currentTabId);
   debugModeEnabled = await loadDebugMode();
-  setSpeedUi(currentWpm);
   setDebugUi();
   renderSelectionProgress(null);
   renderDebug(null);
+
+  const readerPreferenceState = await loadReaderPreferences();
+  readerPresets = readerPreferenceState.presets;
+  currentMode = DEFAULT_READING_MODE;
+  refreshDerivedTimes();
+
+  if (!readerPreferenceState.confirmed) {
+    openPresetEditor("setup");
+    return;
+  }
+
+  appShellEl.hidden = false;
   await fetchWordCount();
 });

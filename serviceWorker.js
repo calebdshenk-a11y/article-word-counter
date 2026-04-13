@@ -1,48 +1,21 @@
 "use strict";
 
-const MIN_READING_WPM = 100;
-const MAX_READING_WPM = 2000;
-const DEFAULT_READING_WPM = 500;
-const READING_SPEED_BY_TAB_KEY = "readerWpmByTab";
 const BADGE_BACKGROUND_COLOR = "#555555";
 const BADGE_TEXT_COLOR = "#ffffff";
 const DEFAULT_ACTION_TITLE = "Article Word Counter";
 
 const progressByTabId = new Map();
 
-function isValidWpm(value) {
-  return Number.isFinite(value) && value >= MIN_READING_WPM && value <= MAX_READING_WPM;
-}
-
-function toSpeedByTabMap(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  return value;
-}
-
-async function getReadingSpeedForTab(tabId) {
-  if (typeof tabId !== "number") {
-    return DEFAULT_READING_WPM;
-  }
-
-  try {
-    const stored = await chrome.storage.local.get(READING_SPEED_BY_TAB_KEY);
-    const speedByTab = toSpeedByTabMap(stored[READING_SPEED_BY_TAB_KEY]);
-    const parsed = Number(speedByTab[String(tabId)]);
-    return isValidWpm(parsed) ? Math.round(parsed) : DEFAULT_READING_WPM;
-  } catch (_error) {
-    return DEFAULT_READING_WPM;
-  }
-}
-
 async function setBadgeForTab(tabId, percent) {
   if (typeof tabId !== "number") {
     return;
   }
 
-  const roundedPercent = Number.isFinite(percent) ? Math.max(0, Math.min(100, Math.round(percent))) : null;
+  const roundedPercent = Number.isFinite(percent)
+    ? Math.max(0, Math.min(100, Math.round(percent)))
+    : null;
   const text = Number.isFinite(roundedPercent) ? String(roundedPercent) : "";
+
   await chrome.action.setBadgeBackgroundColor({ tabId, color: BADGE_BACKGROUND_COLOR });
   if (chrome.action && typeof chrome.action.setBadgeTextColor === "function") {
     await chrome.action.setBadgeTextColor({ tabId, color: BADGE_TEXT_COLOR });
@@ -74,14 +47,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     const senderTabId =
       sender && sender.tab && typeof sender.tab.id === "number" ? sender.tab.id : null;
-
-    if (message.type === "GET_READING_SPEED_FOR_TAB") {
-      sendResponse({
-        ok: true,
-        wpm: await getReadingSpeedForTab(senderTabId)
-      });
-      return;
-    }
 
     if (message.type === "SET_TAB_PROGRESS") {
       if (typeof senderTabId !== "number" || !message.progress || typeof message.progress !== "object") {

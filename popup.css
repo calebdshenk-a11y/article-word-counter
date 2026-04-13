@@ -43,6 +43,11 @@ body {
   gap: 12px;
 }
 
+.appShell {
+  display: grid;
+  gap: 12px;
+}
+
 .card {
   background: var(--card-bg);
   backdrop-filter: blur(6px);
@@ -74,6 +79,87 @@ body {
   margin: 0;
   font-size: 13px;
   color: var(--text-muted);
+}
+
+.presetEditor {
+  display: grid;
+  gap: 12px;
+}
+
+.setupTitle {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.setupMeta {
+  line-height: 1.45;
+}
+
+.presetForm {
+  display: grid;
+  gap: 12px;
+}
+
+.presetFields {
+  display: grid;
+  gap: 10px;
+}
+
+.presetField {
+  display: grid;
+  gap: 6px;
+}
+
+.presetFieldLabel {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.presetFieldHint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.presetInput {
+  width: 100%;
+  border: 1px solid var(--chip-border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 15px;
+  color: var(--text-strong);
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.presetInput:focus {
+  outline: 2px solid rgba(12, 139, 134, 0.18);
+  outline-offset: 2px;
+  border-color: #60cfc8;
+}
+
+.presetInput[aria-invalid="true"] {
+  border-color: #d64545;
+  background: #fff5f5;
+}
+
+.formError {
+  margin: 0;
+  min-height: 18px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #b83232;
+}
+
+.setupActions {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
 }
 
 .details {
@@ -188,7 +274,7 @@ body {
   background: var(--button-hover);
 }
 
-.speed {
+.secondaryAction {
   border: 1px solid var(--chip-border);
   border-radius: 12px;
   font: inherit;
@@ -200,7 +286,7 @@ body {
   transition: background-color 0.16s ease;
 }
 
-.speed:hover {
+.secondaryAction:hover {
   background: #edf3fc;
 }
 
@@ -212,6 +298,9 @@ body {
 }
 
 .presetChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 1px solid var(--chip-border);
   border-radius: 999px;
   font: inherit;
@@ -237,6 +326,12 @@ body {
   border-color: #60cfc8;
   background: linear-gradient(140deg, #dff8f5, #ccf3ee);
   color: #0a4f4c;
+}
+
+.presetChipValue {
+  font-size: 11px;
+  font-weight: 800;
+  color: inherit;
 }
 
 .debugToggle {
