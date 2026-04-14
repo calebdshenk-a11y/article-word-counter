@@ -1,11 +1,20 @@
 # Article Word Counter (Browser Extension)
 
-A lightweight Chrome/Edge extension that estimates the word count of the **main article body** on the current page while trying to ignore:
+A lightweight Chrome/Edge extension that estimates the word count of the **main article body** on the current page and lets you **double-click any word** in the article to update the toolbar badge with your reading progress.
+
+It tries to ignore:
 
 - site headers and footers
 - sidebars and navigation
 - ad/promo blocks
 - related/recommended sections
+
+## Highlights
+
+- estimates the main article word count instead of counting the whole page
+- lets you double-click a word in the article to track exactly how far through the piece you are
+- updates the extension badge with your reading progress for the current tab
+- shows percent done, time left, and words remaining in the popup
 
 ## Why this is accurate
 
@@ -29,19 +38,20 @@ The content script does not count the whole page. It:
 ## Use
 
 1. Open any article page.
-2. Click the extension icon.
-3. The popup shows:
+2. Double-click any single word in the article body whenever you want to mark your place.
+   - the toolbar badge updates to show your reading progress for that tab
+3. Click the extension icon.
+4. The popup shows:
    - article word count (rounded to nearest hundred; hover for exact count)
    - estimated reading time using your selected reading mode
    - extraction confidence
    - selected-word progress details (percent done, time left, words remaining)
-4. On first open, confirm or customize your reading presets.
+5. On first open, confirm or customize your reading presets.
    - default presets are `Skim 325 WPM`, `Normal 250 WPM`, and `Deep 200 WPM`
    - after you save them once, the extension will keep using your presets until you change them
-5. Click **Refresh Count** after page updates.
-6. Click **Set Presets** any time you want to change your saved skim, normal, and deep speeds.
-7. Use the **Skim**, **Normal**, and **Deep** buttons to switch the current article's time estimates.
-8. Double-click a single word in the article body to set the toolbar badge percentage for that tab.
+6. Click **Refresh Count** after page updates.
+7. Click **Set Presets** any time you want to change your saved skim, normal, and deep speeds.
+8. Use the **Skim**, **Normal**, and **Deep** buttons to switch the current article's time estimates.
 9. Open the extension popup to see the matching time-left and remaining-word details for the selected word.
 
 ## Troubleshooting
