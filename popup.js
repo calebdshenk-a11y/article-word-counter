@@ -138,8 +138,13 @@ function renderCountValue(showExact = false) {
 }
 
 function setDebugUi() {
-  debugToggleButton.textContent = debugModeEnabled ? "Debug: On" : "Debug: Off";
+  debugToggleButton.textContent = debugModeEnabled ? "Debug On" : "Debug Off";
   debugToggleButton.setAttribute("aria-pressed", String(debugModeEnabled));
+  debugToggleButton.setAttribute(
+    "aria-label",
+    debugModeEnabled ? "Debug mode on" : "Debug mode off"
+  );
+  debugToggleButton.title = debugModeEnabled ? "Debug mode: on" : "Debug mode: off";
   debugPanelEl.hidden = !debugModeEnabled;
 }
 
@@ -289,7 +294,12 @@ function setPresetUi() {
 
 function setSpeedUi() {
   currentWpm = readerPresets[currentMode] || readerPresets[DEFAULT_READING_MODE];
-  speedChipEl.textContent = `${getPresetLabel(currentMode)} · ${currentWpm} wpm`;
+  speedChipEl.textContent = `${getPresetLabel(currentMode)} ${currentWpm}`;
+  speedChipEl.setAttribute(
+    "aria-label",
+    `${getPresetLabel(currentMode)}, ${currentWpm} words per minute`
+  );
+  speedChipEl.title = `${getPresetLabel(currentMode)}: ${currentWpm} wpm`;
   setPresetUi();
 }
 
@@ -330,7 +340,9 @@ function setErrorState(message) {
   clearCountHoverDetails();
   metaEl.textContent = message;
   readingTimeEl.textContent = "-- read";
-  confidenceEl.textContent = "Confidence: --";
+  confidenceEl.textContent = "Confidence --";
+  confidenceEl.setAttribute("aria-label", "Confidence unavailable");
+  confidenceEl.title = "Confidence unavailable";
   lastResult = null;
   renderSelectionProgress(null);
   renderDebug(null, `Error: ${message}`);
@@ -456,7 +468,9 @@ function setResultState(result) {
   renderCountValue(false);
   titleEl.textContent = result.pageTitle || "Current tab";
   readingTimeEl.textContent = formatReadingTimeFromWords(result.words, currentWpm);
-  confidenceEl.textContent = `Confidence: ${result.confidence}`;
+  confidenceEl.textContent = `Confidence ${result.confidence}`;
+  confidenceEl.setAttribute("aria-label", `Confidence: ${result.confidence}`);
+  confidenceEl.title = `Confidence: ${result.confidence}`;
 
   if (result.extractionSource === "metadata") {
     metaEl.textContent = "Used publisher word-count metadata.";
