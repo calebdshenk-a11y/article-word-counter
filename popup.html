@@ -82,7 +82,10 @@
         <section class="details">
           <p id="title" class="title">Current tab</p>
           <div class="chips">
-            <span id="readingTime" class="chip">-- read</span>
+            <span id="readingTime" class="chip timeChip articleTimeChip">
+              <span id="readingTimeValue" class="timeValue">--</span>
+              <span id="readingTimeUnit" class="timeUnit">read</span>
+            </span>
             <span id="speedChip" class="chip">Normal 250</span>
             <span id="confidence" class="chip">Confidence --</span>
           </div>
@@ -92,9 +95,9 @@
           <p class="progressLabel">Article Progress</p>
           <div class="progressSummary">
             <strong id="progressValue" class="progressValue">No word selected</strong>
-            <span id="progressTime" class="chip progressChip" hidden>
-              <span id="progressTimeValue" class="progressTimeValue">--</span>
-              <span id="progressTimeUnit" class="progressTimeUnit">left</span>
+            <span id="progressTime" class="chip timeChip progressChip" hidden>
+              <span id="progressTimeValue" class="timeValue">--</span>
+              <span id="progressTimeUnit" class="timeUnit">left</span>
             </span>
           </div>
           <p id="progressMeta" class="progressMeta">

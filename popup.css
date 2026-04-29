@@ -209,6 +209,14 @@ body {
 }
 
 .progressChip {
+  min-height: 36px;
+}
+
+.progressPanel.isActive .progressChip {
+  order: -1;
+}
+
+.timeChip {
   gap: 4px;
   min-height: 36px;
   font-size: 12px;
@@ -219,18 +227,14 @@ body {
   padding: 3px 10px 4px 12px;
 }
 
-.progressPanel.isActive .progressChip {
-  order: -1;
-}
-
-.progressTimeValue {
+.timeValue {
   font-size: 22px;
   line-height: 0.95;
   letter-spacing: 0;
   font-variant-numeric: tabular-nums;
 }
 
-.progressTimeUnit {
+.timeUnit {
   font-size: 10px;
   line-height: 1;
   letter-spacing: 0;
@@ -278,13 +282,8 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-#readingTime {
-  font-size: 13px;
-  font-weight: 800;
-  color: #0a4f4c;
-  background: linear-gradient(140deg, #dbf8f5, #c9f1ed);
-  border-color: #6bcfc6;
-  padding: 6px 12px;
+.articleTimeChip {
+  flex: 0 0 auto;
 }
 
 #speedChip,

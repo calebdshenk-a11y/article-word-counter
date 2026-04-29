@@ -38,6 +38,8 @@ const countEl = document.getElementById("count");
 const metaEl = document.getElementById("meta");
 const titleEl = document.getElementById("title");
 const readingTimeEl = document.getElementById("readingTime");
+const readingTimeValueEl = document.getElementById("readingTimeValue");
+const readingTimeUnitEl = document.getElementById("readingTimeUnit");
 const progressPanelEl = document.getElementById("progressPanel");
 const progressValueEl = document.getElementById("progressValue");
 const progressTimeEl = document.getElementById("progressTime");
@@ -310,9 +312,9 @@ function refreshDerivedTimes() {
   setSpeedUi();
 
   if (lastResult && lastResult.ok) {
-    readingTimeEl.textContent = formatReadingTimeFromWords(lastResult.words, currentWpm);
+    renderReadingTime(lastResult.words, currentWpm);
   } else {
-    readingTimeEl.textContent = "-- read";
+    resetReadingTime();
   }
 
   if (lastTabProgress) {
@@ -343,7 +345,7 @@ function setErrorState(message) {
   countHoverEnabled = false;
   clearCountHoverDetails();
   metaEl.textContent = message;
-  readingTimeEl.textContent = "-- read";
+  resetReadingTime();
   confidenceEl.textContent = "Confidence --";
   confidenceEl.setAttribute("aria-label", "Confidence unavailable");
   confidenceEl.title = "Confidence unavailable";
@@ -421,13 +423,31 @@ async function saveDebugMode(enabled) {
   }
 }
 
-function formatReadingTimeFromWords(words, wpm) {
+function getReadingTimeParts(words, wpm) {
   if (!Number.isFinite(words) || words <= 0 || !isValidWpm(wpm)) {
-    return "-- read";
+    return { value: "--", unit: "read", label: "-- read" };
   }
 
   const minutes = Math.max(1, Math.round(words / wpm));
-  return `${minutes}m read`;
+  return { value: `${minutes}m`, unit: "read", label: `${minutes}m read` };
+}
+
+function resetReadingTime() {
+  readingTimeValueEl.textContent = "--";
+  readingTimeUnitEl.textContent = "read";
+  readingTimeEl.removeAttribute("aria-label");
+  readingTimeEl.removeAttribute("title");
+}
+
+function renderReadingTime(words, wpm) {
+  const readingTime = getReadingTimeParts(words, wpm);
+  readingTimeValueEl.textContent = readingTime.value;
+  readingTimeUnitEl.textContent = readingTime.unit;
+
+  const accessibleLabel = `Estimated article reading time: ${readingTime.label}`;
+  readingTimeEl.setAttribute("aria-label", accessibleLabel);
+  readingTimeEl.title = accessibleLabel;
+  return readingTime.label;
 }
 
 function getRemainingTimeParts(words, wpm) {
@@ -494,7 +514,7 @@ function setResultState(result) {
   countHoverEnabled = true;
   renderCountValue(false);
   titleEl.textContent = result.pageTitle || "Current tab";
-  readingTimeEl.textContent = formatReadingTimeFromWords(result.words, currentWpm);
+  renderReadingTime(result.words, currentWpm);
   confidenceEl.textContent = `Confidence ${result.confidence}`;
   confidenceEl.setAttribute("aria-label", `Confidence: ${result.confidence}`);
   confidenceEl.title = `Confidence: ${result.confidence}`;
