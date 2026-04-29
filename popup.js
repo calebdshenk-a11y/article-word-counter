@@ -38,8 +38,11 @@ const countEl = document.getElementById("count");
 const metaEl = document.getElementById("meta");
 const titleEl = document.getElementById("title");
 const readingTimeEl = document.getElementById("readingTime");
+const progressPanelEl = document.getElementById("progressPanel");
 const progressValueEl = document.getElementById("progressValue");
 const progressTimeEl = document.getElementById("progressTime");
+const progressTimeValueEl = document.getElementById("progressTimeValue");
+const progressTimeUnitEl = document.getElementById("progressTimeUnit");
 const progressMetaEl = document.getElementById("progressMeta");
 const speedChipEl = document.getElementById("speedChip");
 const confidenceEl = document.getElementById("confidence");
@@ -327,9 +330,10 @@ function setBusyState() {
   countHoverEnabled = false;
   clearCountHoverDetails();
   metaEl.textContent = "Analyzing the current page...";
+  progressPanelEl.classList.remove("isActive");
   progressValueEl.textContent = "Checking progress";
   progressTimeEl.hidden = true;
-  progressTimeEl.textContent = "-- left";
+  resetProgressTime();
   progressMetaEl.textContent = "Looking for a selected word in the article.";
   renderDebug(lastResult, "Analyzing the current page...");
 }
@@ -426,33 +430,56 @@ function formatReadingTimeFromWords(words, wpm) {
   return `${minutes}m read`;
 }
 
-function formatRemainingTimeFromWords(words, wpm) {
+function getRemainingTimeParts(words, wpm) {
   if (!Number.isFinite(words) || words < 0 || !isValidWpm(wpm)) {
-    return "-- left";
+    return { value: "--", unit: "left", label: "-- left" };
   }
 
   if (words === 0) {
-    return "Done";
+    return { value: "Done", unit: "", label: "Done" };
   }
 
   const minutes = Math.max(1, Math.round(words / wpm));
-  return `${minutes}m left`;
+  return { value: `${minutes}m`, unit: "left", label: `${minutes}m left` };
+}
+
+function resetProgressTime() {
+  progressTimeValueEl.textContent = "--";
+  progressTimeUnitEl.textContent = "left";
+  progressTimeUnitEl.hidden = false;
+  progressTimeEl.removeAttribute("aria-label");
+  progressTimeEl.removeAttribute("title");
+}
+
+function renderProgressTime(words, wpm) {
+  const remainingTime = getRemainingTimeParts(words, wpm);
+  progressTimeValueEl.textContent = remainingTime.value;
+  progressTimeUnitEl.textContent = remainingTime.unit;
+  progressTimeUnitEl.hidden = !remainingTime.unit;
+
+  const accessibleLabel =
+    remainingTime.label === "Done" ? "Article complete" : `Estimated time left: ${remainingTime.label}`;
+  progressTimeEl.setAttribute("aria-label", accessibleLabel);
+  progressTimeEl.title = accessibleLabel;
+  return remainingTime.label;
 }
 
 function renderSelectionProgress(progress) {
   lastTabProgress = progress || null;
 
   if (!progress) {
+    progressPanelEl.classList.remove("isActive");
     progressValueEl.textContent = "No word selected";
     progressTimeEl.hidden = true;
-    progressTimeEl.textContent = "-- left";
-    progressMetaEl.textContent = "Double-click a single word in the article to set progress.";
+    resetProgressTime();
+    progressMetaEl.textContent = "Double-click a word to estimate time left.";
     return;
   }
 
+  progressPanelEl.classList.add("isActive");
   progressValueEl.textContent = `${progress.percent}% done`;
   progressTimeEl.hidden = false;
-  progressTimeEl.textContent = formatRemainingTimeFromWords(progress.remainingWords, currentWpm);
+  renderProgressTime(progress.remainingWords, currentWpm);
 
   if (progress.remainingWords <= 0) {
     progressMetaEl.textContent = `${formatWordCount(progress.totalWords)} words total`;

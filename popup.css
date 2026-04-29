@@ -169,19 +169,19 @@ body {
 
 .progressPanel {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   background: rgba(255, 255, 255, 0.72);
   border: 1px solid rgba(199, 210, 227, 0.8);
-  border-radius: 14px;
-  padding: 12px 14px;
+  border-radius: 13px;
+  padding: 10px 12px;
   box-shadow: 0 8px 18px rgba(16, 42, 67, 0.08);
 }
 
 .progressLabel {
   margin: 0;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
   color: var(--text-muted);
   text-transform: uppercase;
 }
@@ -190,27 +190,57 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
 }
 
 .progressValue {
   font-size: 18px;
   line-height: 1.1;
+  font-weight: 800;
   color: var(--text-strong);
 }
 
-.progressChip {
-  min-height: 34px;
+.progressPanel.isActive .progressValue {
+  margin-left: auto;
   font-size: 12px;
-  font-weight: 700;
+  line-height: 1.15;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.progressChip {
+  gap: 4px;
+  min-height: 36px;
+  font-size: 12px;
+  font-weight: 800;
   color: #0a4f4c;
   background: linear-gradient(140deg, #dbf8f5, #c9f1ed);
   border-color: #6bcfc6;
+  padding: 3px 10px 4px 12px;
+}
+
+.progressPanel.isActive .progressChip {
+  order: -1;
+}
+
+.progressTimeValue {
+  font-size: 22px;
+  line-height: 0.95;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.progressTimeUnit {
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  color: #23706c;
 }
 
 .progressMeta {
   margin: 0;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-muted);
 }
 

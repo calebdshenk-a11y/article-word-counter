@@ -89,13 +89,16 @@
         </section>
 
         <section id="progressPanel" class="progressPanel" aria-live="polite">
-          <p class="progressLabel">Selected Word Progress</p>
+          <p class="progressLabel">Article Progress</p>
           <div class="progressSummary">
             <strong id="progressValue" class="progressValue">No word selected</strong>
-            <span id="progressTime" class="chip progressChip" hidden>-- left</span>
+            <span id="progressTime" class="chip progressChip" hidden>
+              <span id="progressTimeValue" class="progressTimeValue">--</span>
+              <span id="progressTimeUnit" class="progressTimeUnit">left</span>
+            </span>
           </div>
           <p id="progressMeta" class="progressMeta">
-            Double-click a single word in the article to set progress.
+            Double-click a word to estimate time left.
           </p>
         </section>
 
