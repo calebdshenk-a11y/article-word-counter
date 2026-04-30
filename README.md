@@ -9,6 +9,13 @@ It tries to ignore:
 - ad/promo blocks
 - related/recommended sections
 
+## Highlights
+
+- estimates the main article word count instead of counting the whole page
+- lets you double-click a word in the article to track exactly how far through the piece you are
+- updates the extension badge with your reading progress for the current tab
+- shows percent done, time left, and words remaining in the popup
+
 ## Install in Chrome
 
 This extension is not currently in the Chrome Web Store, so you install it manually from GitHub. No coding is required.
@@ -21,13 +28,6 @@ This extension is not currently in the Chrome Web Store, so you install it manua
 6. Click **Load unpacked**.
 7. Select the unzipped extension folder.
 
-## Highlights
-
-- estimates the main article word count instead of counting the whole page
-- lets you double-click a word in the article to track exactly how far through the piece you are
-- updates the extension badge with your reading progress for the current tab
-- shows percent done, time left, and words remaining in the popup
-
 ## Why this is accurate
 
 The content script does not count the whole page. It:
@@ -36,16 +36,6 @@ The content script does not count the whole page. It:
 2. Picks the most article-like container.
 3. Filters out boilerplate nodes and high-link-density blocks (common in nav/related lists).
 4. Counts words using `Intl.Segmenter` when available for better tokenization.
-
-## Install from GitHub
-
-1. Download this repository:
-   - Click **Code > Download ZIP** on GitHub, then unzip it, or
-   - Clone it with `git clone <repo-url>`
-2. Open `chrome://extensions` (or `edge://extensions`).
-3. Enable **Developer mode**.
-4. Click **Load unpacked**.
-5. Select the downloaded or cloned project folder.
 
 ## Use
 
