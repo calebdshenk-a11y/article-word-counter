@@ -9,6 +9,18 @@ It tries to ignore:
 - ad/promo blocks
 - related/recommended sections
 
+## Install in Chrome
+
+This extension is not currently in the Chrome Web Store, so you install it manually from GitHub. No coding is required.
+
+1. Click the green **Code** button on this GitHub page.
+2. Click **Download ZIP**.
+3. Unzip the downloaded file.
+4. Open Chrome and go to `chrome://extensions`.
+5. Turn on **Developer mode** in the top right.
+6. Click **Load unpacked**.
+7. Select the unzipped extension folder.
+
 ## Highlights
 
 - estimates the main article word count instead of counting the whole page
