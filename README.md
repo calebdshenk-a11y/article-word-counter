@@ -28,6 +28,12 @@ This extension is not currently in the Chrome Web Store, so you install it manua
 6. Click **Load unpacked**.
 7. Select the unzipped extension folder.
 
+## Updates
+
+The popup checks the `manifest.json` version on GitHub `main`. When that version is newer than the installed extension, it shows a **New version** notice with a **Download update** link.
+
+For this to work, each update must bump the `"version"` field in `manifest.json` before it lands on `main`.
+
 ## Why this is accurate
 
 The content script does not count the whole page. It:

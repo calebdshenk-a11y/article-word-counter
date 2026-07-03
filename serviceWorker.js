@@ -6,9 +6,37 @@ const DEFAULT_ACTION_TITLE = "Article Word Counter";
 
 const progressByTabId = new Map();
 
+async function trySetBadgeBackgroundColor(tabId) {
+  try {
+    await chrome.action.setBadgeBackgroundColor({ tabId, color: BADGE_BACKGROUND_COLOR });
+  } catch (_error) {
+    // Badge text should still appear even if this browser rejects custom colors.
+  }
+}
+
+async function trySetBadgeTextColor(tabId) {
+  if (!(chrome.action && typeof chrome.action.setBadgeTextColor === "function")) {
+    return;
+  }
+
+  try {
+    await chrome.action.setBadgeTextColor({ tabId, color: BADGE_TEXT_COLOR });
+  } catch (_error) {
+    // Optional in older Chrome-compatible browsers.
+  }
+}
+
+async function trySetActionTitle(tabId, title) {
+  try {
+    await chrome.action.setTitle({ tabId, title });
+  } catch (_error) {
+    // The badge is the primary signal; keep it if the title update fails.
+  }
+}
+
 async function setBadgeForTab(tabId, percent) {
   if (typeof tabId !== "number") {
-    return;
+    return false;
   }
 
   const roundedPercent = Number.isFinite(percent)
@@ -16,27 +44,27 @@ async function setBadgeForTab(tabId, percent) {
     : null;
   const text = Number.isFinite(roundedPercent) ? String(roundedPercent) : "";
 
-  await chrome.action.setBadgeBackgroundColor({ tabId, color: BADGE_BACKGROUND_COLOR });
-  if (chrome.action && typeof chrome.action.setBadgeTextColor === "function") {
-    await chrome.action.setBadgeTextColor({ tabId, color: BADGE_TEXT_COLOR });
-  }
   await chrome.action.setBadgeText({ tabId, text });
-  await chrome.action.setTitle({
+  await trySetBadgeBackgroundColor(tabId);
+  await trySetBadgeTextColor(tabId);
+  await trySetActionTitle(
     tabId,
-    title: Number.isFinite(roundedPercent)
+    Number.isFinite(roundedPercent)
       ? `${roundedPercent}% done with this article`
       : DEFAULT_ACTION_TITLE
-  });
+  );
+  return true;
 }
 
 async function clearProgressForTab(tabId) {
   if (typeof tabId !== "number") {
-    return;
+    return false;
   }
 
   progressByTabId.delete(tabId);
   await chrome.action.setBadgeText({ tabId, text: "" });
-  await chrome.action.setTitle({ tabId, title: DEFAULT_ACTION_TITLE });
+  await trySetActionTitle(tabId, DEFAULT_ACTION_TITLE);
+  return true;
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -81,8 +109,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             : new Date().toISOString()
       });
 
-      await setBadgeForTab(senderTabId, percent);
-      sendResponse({ ok: true });
+      const badgeUpdated = await setBadgeForTab(senderTabId, percent);
+      sendResponse({ ok: badgeUpdated });
       return;
     }
 
@@ -101,7 +129,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           typeof requestedTabId === "number" ? progressByTabId.get(requestedTabId) || null : null
       });
     }
-  })();
+  })().catch(() => {
+    sendResponse({ ok: false });
+  });
 
   return true;
 });
@@ -116,7 +146,7 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   const progress = progressByTabId.get(tabId);
   if (!progress) {
     await chrome.action.setBadgeText({ tabId, text: "" });
-    await chrome.action.setTitle({ tabId, title: DEFAULT_ACTION_TITLE });
+    await trySetActionTitle(tabId, DEFAULT_ACTION_TITLE);
     return;
   }
 

@@ -14,11 +14,17 @@ const PRESET_META = Object.freeze({
   deep: { label: "Deep" }
 });
 const DEFAULT_READING_MODE = "normal";
-const CONTENT_SCRIPT_VERSION = 17;
+const CONTENT_SCRIPT_VERSION = 21;
 const DEBUG_MODE_KEY = "debugModeEnabled";
 const READER_PRESETS_KEY = "readerPresets";
 const READER_PRESETS_CONFIRMED_KEY = "readerPresetsConfirmed";
 const LEGACY_READING_SPEED_BY_TAB_KEY = "readerWpmByTab";
+const UPDATE_CHECK_CACHE_KEY = "latestVersionCheck";
+const UPDATE_CHECK_CACHE_TTL_MS = 60 * 60 * 1000;
+const UPDATE_MANIFEST_URL =
+  "https://raw.githubusercontent.com/calebdshenk-a11y/article-word-counter/main/manifest.json";
+const UPDATE_DOWNLOAD_URL =
+  "https://github.com/calebdshenk-a11y/article-word-counter/archive/refs/heads/main.zip";
 
 const presetEditorPanelEl = document.getElementById("presetEditorPanel");
 const presetEditorEyebrowEl = document.getElementById("presetEditorEyebrow");
@@ -54,6 +60,9 @@ const presetButtons = Array.from(document.querySelectorAll(".presetChip"));
 const debugToggleButton = document.getElementById("debugToggleButton");
 const debugPanelEl = document.getElementById("debugPanel");
 const debugDetailsEl = document.getElementById("debugDetails");
+const updateNoticeEl = document.getElementById("updateNotice");
+const updateLabelEl = document.getElementById("updateLabel");
+const updateDownloadLinkEl = document.getElementById("updateDownloadLink");
 
 const numberFormatter = new Intl.NumberFormat();
 
@@ -140,6 +149,17 @@ function renderCountValue(showExact = false) {
   countEl.textContent = formatWordCount(displayedWords);
   countEl.title = exactLabel;
   countEl.setAttribute("aria-label", exactLabel);
+}
+
+function setArticleTimeHiddenForProgress(hiddenForProgress) {
+  readingTimeEl.classList.toggle("isHiddenForProgress", Boolean(hiddenForProgress));
+
+  if (hiddenForProgress) {
+    readingTimeEl.setAttribute("aria-hidden", "true");
+    return;
+  }
+
+  readingTimeEl.removeAttribute("aria-hidden");
 }
 
 function setDebugUi() {
@@ -423,6 +443,155 @@ async function saveDebugMode(enabled) {
   }
 }
 
+function parseManifestVersion(version) {
+  if (typeof version !== "string") {
+    return null;
+  }
+
+  const trimmed = version.trim();
+  if (!/^\d+(?:\.\d+){0,3}$/.test(trimmed)) {
+    return null;
+  }
+
+  return trimmed.split(".").map((part) => Number(part));
+}
+
+function compareManifestVersions(leftVersion, rightVersion) {
+  const leftParts = parseManifestVersion(leftVersion);
+  const rightParts = parseManifestVersion(rightVersion);
+
+  if (!leftParts || !rightParts) {
+    return 0;
+  }
+
+  const partCount = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < partCount; index += 1) {
+    const left = leftParts[index] || 0;
+    const right = rightParts[index] || 0;
+
+    if (left > right) {
+      return 1;
+    }
+    if (left < right) {
+      return -1;
+    }
+  }
+
+  return 0;
+}
+
+function isNewerManifestVersion(candidateVersion, currentVersion) {
+  return compareManifestVersions(candidateVersion, currentVersion) > 0;
+}
+
+function getInstalledVersion() {
+  try {
+    const manifest = chrome.runtime.getManifest();
+    return manifest && typeof manifest.version === "string" ? manifest.version : "";
+  } catch (_error) {
+    return "";
+  }
+}
+
+function hideUpdateNotice() {
+  updateNoticeEl.hidden = true;
+}
+
+function showUpdateNotice(latestVersion) {
+  const updateTitle = latestVersion
+    ? `Article Word Counter ${latestVersion} is available`
+    : "A new Article Word Counter version is available";
+
+  updateLabelEl.textContent = "New version";
+  updateNoticeEl.title = updateTitle;
+  updateDownloadLinkEl.href = UPDATE_DOWNLOAD_URL;
+  updateDownloadLinkEl.title = "Download the latest Article Word Counter update";
+  updateDownloadLinkEl.setAttribute(
+    "aria-label",
+    latestVersion
+      ? `Download Article Word Counter ${latestVersion}`
+      : "Download the latest Article Word Counter update"
+  );
+  updateNoticeEl.hidden = false;
+}
+
+function getCachedLatestVersion(storedValue, now) {
+  if (!storedValue || typeof storedValue !== "object" || Array.isArray(storedValue)) {
+    return "";
+  }
+
+  const checkedAt = Number(storedValue.checkedAt);
+  if (!Number.isFinite(checkedAt) || now - checkedAt > UPDATE_CHECK_CACHE_TTL_MS) {
+    return "";
+  }
+
+  return typeof storedValue.latestVersion === "string" ? storedValue.latestVersion : "";
+}
+
+async function loadCachedLatestVersion(currentVersion) {
+  try {
+    const stored = await chrome.storage.local.get(UPDATE_CHECK_CACHE_KEY);
+    const cachedVersion = getCachedLatestVersion(stored[UPDATE_CHECK_CACHE_KEY], Date.now());
+    return isNewerManifestVersion(cachedVersion, currentVersion) ? cachedVersion : "";
+  } catch (_error) {
+    return "";
+  }
+}
+
+async function saveLatestVersionCheck(latestVersion) {
+  try {
+    await chrome.storage.local.set({
+      [UPDATE_CHECK_CACHE_KEY]: {
+        latestVersion,
+        checkedAt: Date.now()
+      }
+    });
+  } catch (_error) {
+    // The update notice is best-effort; a storage failure should not affect the popup.
+  }
+}
+
+async function fetchLatestManifestVersion() {
+  const response = await fetch(UPDATE_MANIFEST_URL, { cache: "no-store" });
+  if (!response.ok) {
+    return "";
+  }
+
+  const manifest = await response.json();
+  return manifest && typeof manifest.version === "string" ? manifest.version.trim() : "";
+}
+
+async function getLatestManifestVersion(currentVersion) {
+  const cachedVersion = await loadCachedLatestVersion(currentVersion);
+  if (cachedVersion) {
+    return cachedVersion;
+  }
+
+  const latestVersion = await fetchLatestManifestVersion();
+  if (latestVersion) {
+    await saveLatestVersionCheck(latestVersion);
+  }
+  return latestVersion;
+}
+
+async function checkForUpdates() {
+  hideUpdateNotice();
+
+  const currentVersion = getInstalledVersion();
+  if (!currentVersion) {
+    return;
+  }
+
+  try {
+    const latestVersion = await getLatestManifestVersion(currentVersion);
+    if (isNewerManifestVersion(latestVersion, currentVersion)) {
+      showUpdateNotice(latestVersion);
+    }
+  } catch (_error) {
+    hideUpdateNotice();
+  }
+}
+
 function getReadingTimeParts(words, wpm) {
   if (!Number.isFinite(words) || words <= 0 || !isValidWpm(wpm)) {
     return { value: "--", unit: "read", label: "-- read" };
@@ -488,6 +657,7 @@ function renderSelectionProgress(progress) {
   lastTabProgress = progress || null;
 
   if (!progress) {
+    setArticleTimeHiddenForProgress(false);
     progressPanelEl.classList.remove("isActive");
     progressValueEl.textContent = "No word selected";
     progressTimeEl.hidden = true;
@@ -496,6 +666,7 @@ function renderSelectionProgress(progress) {
     return;
   }
 
+  setArticleTimeHiddenForProgress(true);
   progressPanelEl.classList.add("isActive");
   progressValueEl.textContent = `${progress.percent}% done`;
   progressTimeEl.hidden = false;
@@ -821,6 +992,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setDebugUi();
   renderSelectionProgress(null);
   renderDebug(null);
+  void checkForUpdates();
 
   const readerPreferenceState = await loadReaderPreferences();
   readerPresets = readerPreferenceState.presets;

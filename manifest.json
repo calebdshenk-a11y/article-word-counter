@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Article Word Counter",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Count words in the main article text and ignore headers, footers, ads, and related content.",
   "icons": {
     "16": "icons/icon16.png",

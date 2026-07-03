@@ -2,7 +2,7 @@
 
 (() => {
 
-var CONTENT_SCRIPT_VERSION = 17;
+var CONTENT_SCRIPT_VERSION = 21;
 var REQUIRED_SELECTION_WORDS = 1;
 var NEWYORKER_END_MARKER_PATTERN = /^[♦◆❖◊]\s*$/;
 var NEWYORKER_END_MARKER_ANYWHERE_PATTERN = /[♦◆❖◊]/;
@@ -153,8 +153,32 @@ function getClassAndId(node) {
   return `${className} ${node.id || ""}`.toLowerCase();
 }
 
+function isNewYorkerArticlePaywallContent(node, combinedLabel) {
+  if (!(node instanceof Element)) {
+    return false;
+  }
+
+  const host = window.location.hostname.toLowerCase();
+  if (!hostMatchesDomain(host, "newyorker.com") || !/\bpaywall\b/.test(combinedLabel)) {
+    return false;
+  }
+
+  if (!node.matches(BLOCK_SELECTOR)) {
+    return false;
+  }
+
+  return Boolean(
+    node.closest(
+      "article, [class*='ArticlePageContentBackGround'], [class*='ArticlePageChunksContent'], [class*='BodyWrapper'], [class*='body__inner-container']"
+    )
+  );
+}
+
 function hasJunkLabel(node) {
   const combined = getClassAndId(node);
+  if (isNewYorkerArticlePaywallContent(node, combined)) {
+    return false;
+  }
   return JUNK_KEYWORDS.test(combined) && !POSITIVE_KEYWORDS.test(combined);
 }
 
@@ -896,15 +920,6 @@ function buildNewYorkerCountExtraction(baselineParagraphs) {
     return null;
   }
 
-  const jsonLdExtraction = buildJsonLdExtraction();
-  if (jsonLdExtraction) {
-    return {
-      ...jsonLdExtraction,
-      countSource: "newyorker-jsonld-article-body",
-      score: Math.max(jsonLdExtraction.score || 0, 30)
-    };
-  }
-
   const pageContextWords = normalizeAdapterWordCount(adapter, extractNewYorkerPageContextCopyCount());
   if (pageContextWords) {
     return buildHintExtraction(pageContextWords, baselineParagraphs, {
@@ -925,6 +940,17 @@ function buildNewYorkerCountExtraction(baselineParagraphs) {
       rootSelector: "window.dataLayer[].content.wordCount",
       score: 29
     });
+  }
+
+  // New Yorker JSON-LD can contain only an initial excerpt even when the full
+  // article is rendered. Prefer the publisher's page-specific count above it.
+  const jsonLdExtraction = buildJsonLdExtraction();
+  if (jsonLdExtraction) {
+    return {
+      ...jsonLdExtraction,
+      countSource: "newyorker-jsonld-article-body",
+      score: Math.max(jsonLdExtraction.score || 0, 30)
+    };
   }
 
   const jsonLdWordCount = extractJsonLdWordCountHint();
@@ -2053,6 +2079,40 @@ function getProgressPositionFromRoot(root, range) {
   };
 }
 
+function getProgressExtractionVisibleWordsTotal(extraction) {
+  if (!extraction) {
+    return 0;
+  }
+
+  if (Array.isArray(extraction.blocks)) {
+    return extraction.blocks.reduce((total, block) => {
+      return total + (Number.isFinite(block.words) ? block.words : 0);
+    }, 0);
+  }
+
+  if (extraction.root instanceof Element) {
+    return countWords(extraction.root.textContent);
+  }
+
+  return 0;
+}
+
+function shouldUseStructuredProgressPosition(structuredTotalWords, progressExtraction) {
+  if (!Number.isFinite(structuredTotalWords) || structuredTotalWords <= 0) {
+    return false;
+  }
+
+  const visibleWordsTotal = getProgressExtractionVisibleWordsTotal(progressExtraction);
+  if (!Number.isFinite(visibleWordsTotal) || visibleWordsTotal <= 0) {
+    return true;
+  }
+
+  return (
+    visibleWordsTotal >= structuredTotalWords * 0.35 &&
+    structuredTotalWords >= visibleWordsTotal * 0.8
+  );
+}
+
 function getSelectionProgress(forceRefresh) {
   const range = getCurrentSelectionRange();
   if (!range) {
@@ -2071,33 +2131,46 @@ function getSelectionProgress(forceRefresh) {
 
   const analysis = getPageAnalysis(Boolean(forceRefresh));
   const progressExtraction = getProgressExtraction(analysis);
+  const extractionTotalWords =
+    analysis && analysis.extraction && Number.isFinite(analysis.extraction.words)
+      ? analysis.extraction.words
+      : null;
   const structuredTotalWords =
     hasSiteAdapter("newyorker") &&
     typeof analysis.structuredArticleText === "string" &&
     analysis.structuredArticleText
       ? countWords(analysis.structuredArticleText)
       : null;
-
-  if (
+  const useStructuredProgressPosition =
     hasSiteAdapter("newyorker") &&
     Number.isFinite(structuredTotalWords) &&
-    structuredTotalWords > 0
-  ) {
+    structuredTotalWords > 0 &&
+    shouldUseStructuredProgressPosition(structuredTotalWords, progressExtraction);
+
+  if (useStructuredProgressPosition) {
     const structuredPosition = getProgressPositionFromStructuredArticle(
       analysis.structuredArticleText,
       progressExtraction,
       range
     );
     if (structuredPosition && structuredPosition.visibleWordsTotal > 0) {
+      const totalWords =
+        Number.isFinite(extractionTotalWords) && extractionTotalWords > 0
+          ? extractionTotalWords
+          : structuredTotalWords;
+      const ratio = Math.max(
+        0,
+        Math.min(1, structuredPosition.wordsThrough / structuredPosition.visibleWordsTotal)
+      );
       const wordsRead = Math.max(
         0,
-        Math.min(structuredTotalWords, Math.round(structuredPosition.wordsThrough))
+        Math.min(totalWords, Math.round(totalWords * ratio))
       );
-      const remainingWords = Math.max(0, structuredTotalWords - wordsRead);
+      const remainingWords = Math.max(0, totalWords - wordsRead);
 
       return {
-        percent: Math.max(0, Math.min(100, Math.round((wordsRead / structuredTotalWords) * 100))),
-        totalWords: structuredTotalWords,
+        percent: Math.max(0, Math.min(100, Math.round((wordsRead / totalWords) * 100))),
+        totalWords,
         wordsRead,
         remainingWords
       };
@@ -2122,16 +2195,17 @@ function getSelectionProgress(forceRefresh) {
   }
 
   const totalWords =
-    Number.isFinite(structuredTotalWords) && structuredTotalWords > 0
-      ? structuredTotalWords
-      : analysis.extraction.words;
+    Number.isFinite(extractionTotalWords) && extractionTotalWords > 0
+      ? extractionTotalWords
+      : structuredTotalWords;
+  if (!Number.isFinite(totalWords) || totalWords <= 0) {
+    return null;
+  }
+
   const ratio = Math.max(0, Math.min(1, position.wordsThrough / position.visibleWordsTotal));
   const wordsRead = Math.max(
     0,
-    Math.min(
-      totalWords,
-      structuredTotalWords ? Math.round(position.wordsThrough) : Math.round(totalWords * ratio)
-    )
+    Math.min(totalWords, Math.round(totalWords * ratio))
   );
   const remainingWords = Math.max(0, totalWords - wordsRead);
 
@@ -2218,7 +2292,7 @@ function onDocumentDoubleClick(event) {
     void clearTabProgress();
     return;
   }
-  scheduleSelectionProgressUpdate(false, 120);
+  scheduleSelectionProgressUpdate(true, 180);
 }
 
 function onSelectionChange() {
