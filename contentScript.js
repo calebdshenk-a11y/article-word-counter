@@ -2,7 +2,7 @@
 
 (() => {
 
-var CONTENT_SCRIPT_VERSION = 21;
+var CONTENT_SCRIPT_VERSION = 22;
 var REQUIRED_SELECTION_WORDS = 1;
 var NEWYORKER_END_MARKER_PATTERN = /^[♦◆❖◊]\s*$/;
 var NEWYORKER_END_MARKER_ANYWHERE_PATTERN = /[♦◆❖◊]/;
@@ -93,6 +93,11 @@ var ARTICLE_TYPE_PATTERN = /(article|newsarticle|blogposting|report)/i;
 var JSON_LD_NODE_BUDGET = 8000;
 var SITE_ADAPTERS = [
   {
+    id: "rollingstone",
+    domains: ["rollingstone.com"],
+    semanticRootSelectors: [".a-content > .pmc-paywall"]
+  },
+  {
     id: "newyorker",
     domains: ["newyorker.com"],
     semanticRootSelectors: [
@@ -175,9 +180,24 @@ function isNewYorkerArticlePaywallContent(node, combinedLabel) {
 }
 
 function hasJunkLabel(node) {
-  const combined = getClassAndId(node);
+  let combined = getClassAndId(node);
   if (isNewYorkerArticlePaywallContent(node, combined)) {
     return false;
+  }
+  if (
+    hasSiteAdapter("rollingstone") &&
+    node.matches(".brands-most-popular, .recirculation-modules")
+  ) {
+    return true;
+  }
+  // Rolling Stone uses this wrapper for the article itself, including freely
+  // visible text. Ignore only that label, keeping nested promos/paywall UI filtered.
+  if (
+    hasSiteAdapter("rollingstone") &&
+    node.matches(".a-content > .pmc-paywall") &&
+    isProbablyVisible(node)
+  ) {
+    combined = combined.replace(/\bpmc-paywall\b/g, "");
   }
   return JUNK_KEYWORDS.test(combined) && !POSITIVE_KEYWORDS.test(combined);
 }
@@ -1552,7 +1572,14 @@ function chooseBestExtraction(primaryRoot, primaryScore, primarySelector = null)
   const progressCandidates = hasSiteAdapter("newyorker")
     ? [newYorkerMarkerExtraction, primary, semantic, ancestor].filter(isDomTrackableExtraction)
     : [chosen, primary, semantic, ancestor, legacy].filter(isDomTrackableExtraction);
-  const progressExtraction = pickBestExtractionByWords(progressCandidates);
+  // Keep Rolling Stone progress aligned with its detected body; a wider ancestor
+  // can include the topic labels after the final article paragraph.
+  const progressExtraction =
+    hasSiteAdapter("rollingstone") &&
+    isDomTrackableExtraction(chosen) &&
+    chosen.root.matches(".a-content, .a-content > .pmc-paywall")
+      ? chosen
+      : pickBestExtractionByWords(progressCandidates);
 
   return {
     extraction: chosen,

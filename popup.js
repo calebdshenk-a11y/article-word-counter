@@ -14,7 +14,7 @@ const PRESET_META = Object.freeze({
   deep: { label: "Deep" }
 });
 const DEFAULT_READING_MODE = "normal";
-const CONTENT_SCRIPT_VERSION = 21;
+const CONTENT_SCRIPT_VERSION = 22;
 const DEBUG_MODE_KEY = "debugModeEnabled";
 const READER_PRESETS_KEY = "readerPresets";
 const READER_PRESETS_CONFIRMED_KEY = "readerPresetsConfirmed";

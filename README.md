@@ -66,3 +66,11 @@ The content script does not count the whole page. It:
 
 - If you changed local files, click **Reload** on the extension card in `chrome://extensions`.
 - The extension cannot run on restricted tabs like `chrome://` pages or the Chrome Web Store.
+
+## Development checks
+
+Run `npm ci` and `npm test` to check article extraction and reading progress. These development dependencies are not needed to load the extension in Chrome.
+
+## What's new
+
+- **1.0.2:** Fixed severely low word counts on Rolling Stone articles whose visible text is inside the publisher's `pmc-paywall` wrapper. Ads, related stories, and subscription prompts are still excluded.
