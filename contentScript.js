@@ -2,7 +2,7 @@
 
 (() => {
 
-var CONTENT_SCRIPT_VERSION = 22;
+var CONTENT_SCRIPT_VERSION = 23;
 var REQUIRED_SELECTION_WORDS = 1;
 var NEWYORKER_END_MARKER_PATTERN = /^[♦◆❖◊]\s*$/;
 var NEWYORKER_END_MARKER_ANYWHERE_PATTERN = /[♦◆❖◊]/;
@@ -92,6 +92,10 @@ var INLINE_SCRIPT_SELECTOR = "script:not([src])";
 var ARTICLE_TYPE_PATTERN = /(article|newsarticle|blogposting|report)/i;
 var JSON_LD_NODE_BUDGET = 8000;
 var SITE_ADAPTERS = [
+  {
+    id: "archive",
+    domains: ["archive.ph", "archive.today", "archive.is", "archive.li", "archive.vn", "archive.fo", "archive.md"]
+  },
   {
     id: "rollingstone",
     domains: ["rollingstone.com"],
@@ -405,6 +409,91 @@ function evaluateRoot(root, score = 0, source = "candidate", details = {}) {
     adapterId: details.adapterId || null,
     countSource: details.countSource || `dom-${source}`,
     endMarkerDetected: Boolean(blockData.endMarkerDetected)
+  };
+}
+
+function buildArchiveExtraction() {
+  if (!hasSiteAdapter("archive")) {
+    return null;
+  }
+  const snapshot = document.getElementById("CONTENT");
+  if (!snapshot) {
+    return null;
+  }
+
+  // Snapshots replace paragraphs with divs and remove publisher classes. Keep
+  // the original DOM nodes so selecting a word still measures reading progress.
+  const root = snapshot.querySelector("[itemprop='articleBody'], article, [role='article']") ||
+    snapshot.querySelector("main, [role='main']") || snapshot;
+  const blocks = [];
+  const excluded = "figure, figcaption, ul, ol, [role='button'], [role='dialog'], " +
+    "[aria-label='Video Player'], [aria-label='Audio player'], [id^='vjs_'], #hashtags";
+
+  function walk(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return { text: node.textContent || "", hasBlock: false };
+    }
+    if (!(node instanceof Element)) {
+      return { text: "", hasBlock: false };
+    }
+    if (!isProbablyVisible(node)) {
+      return { text: "", hasBlock: false };
+    }
+    if (LEGACY_SKIP_TAGS.has(node.tagName) || isBoilerplateElement(node) || node.matches(excluded)) {
+      return { text: "", hasBlock: true };
+    }
+    if (node.tagName === "BR") {
+      return { text: " ", hasBlock: false };
+    }
+
+    let text = "";
+    let hasBlock = false;
+    for (const child of node.childNodes) {
+      const result = walk(child);
+      text += result.text;
+      hasBlock = hasBlock || result.hasBlock;
+    }
+
+    const display = window.getComputedStyle(node).display;
+    const isBlock = node.matches(BLOCK_SELECTOR) ||
+      (node.tagName === "DIV" && !["inline", "inline-block", "contents"].includes(display));
+    if (isBlock && !hasBlock) {
+      const normalized = normalizeText(text);
+      const words = countWords(normalized);
+      if (words >= 2 &&
+          !(words < 15 && looksLikeByline(normalized)) &&
+          !(words < 12 && (JUNK_HEADING.test(normalized) || /^more (?:great )?stories\b/i.test(normalized))) &&
+          linkDensity(node) <= 0.55) {
+        blocks.push({ node, text: normalized, words });
+      }
+    }
+    return { text, hasBlock: hasBlock || isBlock || /^H[1-6]$/.test(node.tagName) };
+  }
+
+  // Check ancestors too: an invisible snapshot must not become countable.
+  for (let node = root; node; node = node.parentElement) {
+    if (!isProbablyVisible(node) || isBoilerplateElement(node)) {
+      return null;
+    }
+  }
+  walk(root);
+  const words = blocks.reduce((sum, block) => sum + block.words, 0);
+  if (words < 80 || blocks.length < 2) {
+    return null;
+  }
+  return {
+    root,
+    text: blocks.map((block) => block.text).join("\n\n"),
+    words,
+    paragraphs: blocks.length,
+    blocks,
+    score: Math.min(24, blocks.length * 1.5 + words / 200),
+    source: "archive",
+    rootTag: root.tagName.toLowerCase(),
+    rootSelector: root === snapshot ? "#CONTENT" : `#CONTENT ${root.tagName.toLowerCase()}`,
+    adapterId: "archive",
+    countSource: "dom-archive",
+    endMarkerDetected: false
   };
 }
 
@@ -1963,6 +2052,19 @@ function getPageAnalysis(forceRefresh) {
   }
 
   try {
+    const archive = buildArchiveExtraction();
+    if (archive) {
+      cachedPageAnalysis = {
+        pageTitle: document.title || "",
+        url: window.location.href,
+        extraction: archive,
+        progressExtraction: archive,
+        structuredArticleText: null,
+        debug: buildExtractionDebug(archive, [], archive, "archive-snapshot", archive),
+        generatedAt: new Date().toISOString()
+      };
+      return cachedPageAnalysis;
+    }
     const {
       node: primaryRoot,
       score: primaryScore,

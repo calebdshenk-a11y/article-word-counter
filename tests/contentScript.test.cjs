@@ -111,3 +111,74 @@ test("New Yorker paywall paragraphs and end marker remain supported", t => {
   assert.equal(result.words, 300);
   assert.equal(result.debug.decision, "newyorker-end-marker");
 });
+
+// Archive snapshots strip publisher classes and turn p elements into styled divs.
+function archiveFixture() {
+  const archived = article.map(html => html.replace(/<p\b/g, '<div style="display:block;margin-block-end:18px"').replace(/<\/p>/g, "</div>"));
+  return `<div>Saved from archive controls and capture date</div>
+    <div id="CONTENT"><main><article>
+      <header><h1>Article title</h1><div>Article summary and author information</div></header>
+      <div><div>${archived[0]}
+        <div><div>MOST POPULAR</div><ul><li><div role="button"><div>${"extra ".repeat(120)}</div></div></li></ul></div>
+        <figure><img><div>Image caption and photographer credit</div></figure>
+        <div aria-label="Video Player"><div>Unable to play media</div></div>
+        ${archived[1]}
+        <div hidden><div>${"hidden ".repeat(150)}</div></div>
+        <div style="display:none"><h3>Hidden heading should not be counted</h3></div>
+        <aside><div>${"sidebar ".repeat(150)}</div></aside>
+        <div class="advert"><div>${"advertisement ".repeat(150)}</div></div>
+        ${archived[2]}${archived[3]}
+        <div><h2>More Great Stories From Example</h2><ul><li><div><a href="/more">${"related ".repeat(150)}</a></div></li></ul></div>
+      </div></div>
+    </article><div>${"author biography ".repeat(60)}</div></main>
+    <footer><div>Footer links and legal notices</div></footer>
+    <table id="hashtags"><tr><td><div>0 percent 50 percent 100 percent</div></td></tr></table></div>`;
+}
+
+test("archive snapshots count rewritten paragraphs and exclude surrounding modules", t => {
+  const page = loadPage(t, archiveFixture(), "https://archive.ph/example");
+  const result = page.request("GET_ARTICLE_WORD_COUNT");
+  assert.equal(result.words, expectedWords);
+  assert.equal(result.paragraphs, 4);
+  assert.equal(result.extractionSource, "archive");
+});
+
+test("archive reading progress reaches the final word without counting related stories", t => {
+  const page = loadPage(t, archiveFixture(), "https://archive.ph/example");
+  const text = page.window.document.querySelector("#last").firstChild;
+  const range = page.window.document.createRange();
+  range.setStart(text, text.length - 4);
+  range.setEnd(text, text.length);
+  page.window.getSelection().addRange(range);
+  assert.deepEqual({ ...page.request("GET_SELECTION_PROGRESS").progress },
+    { percent: 100, totalWords: expectedWords, wordsRead: expectedWords, remainingWords: 0 });
+});
+
+test("archive inline divs and nested emphasis count once alongside regular paragraphs", t => {
+  const html = `<div id="CONTENT"><article><div>
+    <div>${"word ".repeat(100)}<div style="display:inline"><a href="/reference">linked phrase</a></div> and <em>emphasized text</em>.</div>
+    <blockquote>${paragraph("quote", 100)}</blockquote>
+    ${paragraph("regular", 100)}
+  </div></article></div>`;
+  const page = loadPage(t, html, "https://archive.ph/example");
+  const result = page.request("GET_ARTICLE_WORD_COUNT");
+  assert.equal(result.words, 305);
+  assert.equal(result.paragraphs, 3);
+});
+
+test("archive aliases and snapshots without semantic article tags are supported", t => {
+  for (const host of ["archive.today", "archive.is", "archive.li", "archive.vn", "archive.fo", "archive.md"]) {
+    const html = `<div id="CONTENT"><div>${article.join("").replace(/<p\b/g, "<div").replace(/<\/p>/g, "</div>")}</div></div>`;
+    const page = loadPage(t, html, `https://${host}/example`);
+    assert.equal(page.request("GET_ARTICLE_WORD_COUNT").words, expectedWords);
+  }
+});
+
+test("archive extraction requires an archive host and snapshot container", t => {
+  for (const host of ["example.com", "notarchive.ph", "archive.ph.example.com"]) {
+    const page = loadPage(t, archiveFixture(), `https://${host}/example`);
+    assert.notEqual(page.request("GET_ARTICLE_WORD_COUNT").extractionSource, "archive");
+  }
+  const page = loadPage(t, archiveFixture().replace('id="CONTENT"', 'id="other"'), "https://archive.ph/example");
+  assert.notEqual(page.request("GET_ARTICLE_WORD_COUNT").extractionSource, "archive");
+});

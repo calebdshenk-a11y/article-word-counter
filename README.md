@@ -73,4 +73,5 @@ Run `npm ci` and `npm test` to check article extraction and reading progress. Th
 
 ## What's new
 
+- **1.0.3:** Added word counts and selected-word reading progress for archive.ph and archive.today snapshots, including archived articles whose paragraphs were converted to generic containers.
 - **1.0.2:** Fixed severely low word counts on Rolling Stone articles whose visible text is inside the publisher's `pmc-paywall` wrapper. Ads, related stories, and subscription prompts are still excluded.
