@@ -2,7 +2,7 @@
 
 (() => {
 
-var CONTENT_SCRIPT_VERSION = 23;
+var CONTENT_SCRIPT_VERSION = 24;
 var REQUIRED_SELECTION_WORDS = 1;
 var NEWYORKER_END_MARKER_PATTERN = /^[♦◆❖◊]\s*$/;
 var NEWYORKER_END_MARKER_ANYWHERE_PATTERN = /[♦◆❖◊]/;
@@ -92,6 +92,10 @@ var INLINE_SCRIPT_SELECTOR = "script:not([src])";
 var ARTICLE_TYPE_PATTERN = /(article|newsarticle|blogposting|report)/i;
 var JSON_LD_NODE_BUDGET = 8000;
 var SITE_ADAPTERS = [
+  {
+    id: "libertyfund",
+    domains: ["oll.libertyfund.org"]
+  },
   {
     id: "archive",
     domains: ["archive.ph", "archive.today", "archive.is", "archive.li", "archive.vn", "archive.fo", "archive.md"]
@@ -412,23 +416,10 @@ function evaluateRoot(root, score = 0, source = "candidate", details = {}) {
   };
 }
 
-function buildArchiveExtraction() {
-  if (!hasSiteAdapter("archive")) {
-    return null;
-  }
-  const snapshot = document.getElementById("CONTENT");
-  if (!snapshot) {
-    return null;
-  }
-
-  // Snapshots replace paragraphs with divs and remove publisher classes. Keep
-  // the original DOM nodes so selecting a word still measures reading progress.
-  const root = snapshot.querySelector("[itemprop='articleBody'], article, [role='article']") ||
-    snapshot.querySelector("main, [role='main']") || snapshot;
+// Preserve the original text containers for selected-word progress, including
+// sites whose editor renders paragraphs as divs instead of p elements.
+function collectContainerBlocks(root, blockSelector, excluded) {
   const blocks = [];
-  const excluded = "figure, figcaption, ul, ol, [role='button'], [role='dialog'], " +
-    "[aria-label='Video Player'], [aria-label='Audio player'], [id^='vjs_'], #hashtags";
-
   function walk(node) {
     if (node.nodeType === Node.TEXT_NODE) {
       return { text: node.textContent || "", hasBlock: false };
@@ -455,7 +446,7 @@ function buildArchiveExtraction() {
     }
 
     const display = window.getComputedStyle(node).display;
-    const isBlock = node.matches(BLOCK_SELECTOR) ||
+    const isBlock = node.matches(blockSelector) ||
       (node.tagName === "DIV" && !["inline", "inline-block", "contents"].includes(display));
     if (isBlock && !hasBlock) {
       const normalized = normalizeText(text);
@@ -470,13 +461,62 @@ function buildArchiveExtraction() {
     return { text, hasBlock: hasBlock || isBlock || /^H[1-6]$/.test(node.tagName) };
   }
 
-  // Check ancestors too: an invisible snapshot must not become countable.
   for (let node = root; node; node = node.parentElement) {
     if (!isProbablyVisible(node) || isBoilerplateElement(node)) {
-      return null;
+      return [];
     }
   }
   walk(root);
+  return blocks;
+}
+
+function buildLibertyFundExtraction() {
+  if (!hasSiteAdapter("libertyfund")) {
+    return null;
+  }
+  let best = null;
+  // Pages can have an empty introduction before the actual essay container.
+  for (const root of document.querySelectorAll(".post-content")) {
+    const blocks = collectContainerBlocks(root, `${BLOCK_SELECTOR}, li`,
+      "figure, figcaption, [role='button'], [role='dialog']");
+    const words = blocks.reduce((sum, block) => sum + block.words, 0);
+    if (words < 80 || blocks.length < 2 || (best && best.words >= words)) {
+      continue;
+    }
+    best = {
+      root,
+      text: blocks.map((block) => block.text).join("\n\n"),
+      words,
+      paragraphs: blocks.length,
+      blocks,
+      score: Math.min(24, blocks.length * 1.5 + words / 200),
+      source: "libertyfund",
+      rootTag: "div",
+      rootSelector: ".post-content",
+      adapterId: "libertyfund",
+      countSource: "dom-libertyfund",
+      endMarkerDetected: false
+    };
+  }
+  return best;
+}
+
+function buildArchiveExtraction() {
+  if (!hasSiteAdapter("archive")) {
+    return null;
+  }
+  const snapshot = document.getElementById("CONTENT");
+  if (!snapshot) {
+    return null;
+  }
+
+  // Snapshots replace paragraphs with divs and remove publisher classes. Keep
+  // the original DOM nodes so selecting a word still measures reading progress.
+  const root = snapshot.querySelector("[itemprop='articleBody'], article, [role='article']") ||
+    snapshot.querySelector("main, [role='main']") || snapshot;
+  const blocks = collectContainerBlocks(root, BLOCK_SELECTOR,
+    "figure, figcaption, ul, ol, [role='button'], [role='dialog'], " +
+    "[aria-label='Video Player'], [aria-label='Audio player'], [id^='vjs_'], #hashtags");
   const words = blocks.reduce((sum, block) => sum + block.words, 0);
   if (words < 80 || blocks.length < 2) {
     return null;
@@ -2052,15 +2092,16 @@ function getPageAnalysis(forceRefresh) {
   }
 
   try {
-    const archive = buildArchiveExtraction();
-    if (archive) {
+    const siteExtraction = buildLibertyFundExtraction() || buildArchiveExtraction();
+    if (siteExtraction) {
       cachedPageAnalysis = {
         pageTitle: document.title || "",
         url: window.location.href,
-        extraction: archive,
-        progressExtraction: archive,
+        extraction: siteExtraction,
+        progressExtraction: siteExtraction,
         structuredArticleText: null,
-        debug: buildExtractionDebug(archive, [], archive, "archive-snapshot", archive),
+        debug: buildExtractionDebug(siteExtraction, [], siteExtraction,
+          siteExtraction.source === "archive" ? "archive-snapshot" : "libertyfund-body", siteExtraction),
         generatedAt: new Date().toISOString()
       };
       return cachedPageAnalysis;

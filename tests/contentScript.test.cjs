@@ -182,3 +182,67 @@ test("archive extraction requires an archive host and snapshot container", t => 
   const page = loadPage(t, archiveFixture().replace('id="CONTENT"', 'id="other"'), "https://archive.ph/example");
   assert.notEqual(page.request("GET_ARTICLE_WORD_COUNT").extractionSource, "archive");
 });
+
+const libertyUrl = "https://oll.libertyfund.org/publications/liberty-matters/example";
+function libertyFixture(attributes = 'class="post-content"') {
+  return `<main><h1>Essay title</h1><div class="post-content"><div class="trix-text">&nbsp;</div></div>
+    <div ${attributes}>
+      <div class="trix-text"><img src="portrait.png"></div>
+      <div class="trix-text" id="first">${"word ".repeat(160)}</div>
+      <div class="trix-text">**********************************</div>
+      <div class="trix-text">${"word ".repeat(200)}<em>${"word ".repeat(20)}</em></div>
+      <ul><li><blockquote>${"word ".repeat(30)}</blockquote></li><li>${"word ".repeat(10)}</li></ul>
+      <blockquote>${paragraph("quote", 100)}</blockquote>
+      <div hidden><div class="trix-text">${"hidden ".repeat(100)}</div></div>
+      <div class="advert"><div class="trix-text">${"ad ".repeat(100)}</div></div>
+      <figure><div class="trix-text">${"caption ".repeat(100)}</div></figure>
+      <div class="trix-text" id="last">${"word ".repeat(240).trim()}</div>
+    </div>
+    <div class="copyright"><h4>Copyright and Fair Use Statement</h4>${paragraph("copyright", 100)}</div>
+    <div class="related-card"><h4>Current Posts</h4>${paragraph("sidebar", 100)}</div>
+    <h3>Part of: Other essays</h3><ul><li><a href="/other">Other essay title</a></li></ul>
+  </main><footer>${paragraph("footer", 100)}</footer>`;
+}
+
+test("Liberty Fund counts editor divs, quotations and list items once, excluding boilerplate", t => {
+  const page = loadPage(t, libertyFixture(), libertyUrl);
+  const result = page.request("GET_ARTICLE_WORD_COUNT");
+  assert.equal(result.words, 760);
+  assert.equal(result.paragraphs, 6);
+  assert.equal(result.extractionSource, "libertyfund");
+  assert.equal(result.confidence, "High");
+});
+
+test("Liberty Fund progress includes prose and lists and ends at the essay boundary", t => {
+  const page = loadPage(t, libertyFixture(), libertyUrl);
+  for (const [selector, wordsRead] of [["#first", 160], ["li:first-child blockquote", 410], ["#last", 760]]) {
+    const text = page.window.document.querySelector(selector).firstChild;
+    const range = page.window.document.createRange();
+    const end = text.textContent.trimEnd().length;
+    range.setStart(text, end - 4);
+    range.setEnd(text, end);
+    page.window.getSelection().removeAllRanges();
+    page.window.getSelection().addRange(range);
+    assert.deepEqual({ ...page.request("GET_SELECTION_PROGRESS").progress },
+      { percent: Math.round(wordsRead / 760 * 100), totalWords: 760, wordsRead, remainingWords: 760 - wordsRead });
+  }
+  const text = page.window.document.querySelector("#copyright").firstChild;
+  const range = page.window.document.createRange();
+  range.setStart(text, 0);
+  range.setEnd(text, 4);
+  page.window.getSelection().removeAllRanges();
+  page.window.getSelection().addRange(range);
+  assert.equal(page.request("GET_SELECTION_PROGRESS").progress, null);
+});
+
+test("Liberty Fund extraction is restricted to its host and visible post-content containers", t => {
+  for (const host of ["example.com", "notoll.libertyfund.org", "oll.libertyfund.org.example.com"]) {
+    const page = loadPage(t, libertyFixture(), `https://${host}/article`);
+    assert.notEqual(page.request("GET_ARTICLE_WORD_COUNT").extractionSource, "libertyfund");
+  }
+  for (const attributes of ['class="other"', 'class="post-content" hidden',
+    'class="post-content" aria-hidden="true"', 'class="post-content" style="display:none"']) {
+    const page = loadPage(t, libertyFixture(attributes), libertyUrl);
+    assert.notEqual(page.request("GET_ARTICLE_WORD_COUNT").extractionSource, "libertyfund");
+  }
+});
